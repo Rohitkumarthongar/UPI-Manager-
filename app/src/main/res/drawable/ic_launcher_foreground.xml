@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Main Ledger Card (bounded in safe zone 26 to 82) -->
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M32,28 h44 c3.31,0 6,2.69 6,6 v40 c0,3.31 -2.69,6 -6,6 h-44 c-3.31,0 -6,-2.69 -6,-6 v-40 c0,-3.31 2.69,-6 6,-6 z" />
+
+    <!-- Card Accent Top Bar -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M32,28 h44 c3.31,0 6,2.69 6,6 v4 h-56 v-4 c0,-3.31 2.69,-6 6,-6 z" />
+
+    <!-- Ledger Rows / Financial balance lines -->
+    <path
+        android:fillColor="#64748B"
+        android:pathData="M34,44 h24 v3 h-24 z M34,51 h16 v3 h-16 z M34,58 h28 v3 h-28 z" />
+
+    <!-- Glowing Checkmark / Upward Prosperity Arrow in Emerald -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M64,56 l4,4 l10,-10 l2.5,2.5 l-12.5,12.5 l-6.5,-6.5 z" />
+
+    <!-- UPI / Shield Badge -->
+    <path
+        android:fillColor="#34D399"
+        android:pathData="M66,42 c0,-2 4,-5 6,-5 c2,0 6,3 6,5 c0,5 -3.5,8 -6,9 c-2.5,-1 -6,-4 -6,-9 z" />
+</vector>

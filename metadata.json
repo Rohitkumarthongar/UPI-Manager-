@@ -1,0 +1,6 @@
+{
+  "name": "Offline Ledger",
+  "description": "Offline-first daily task manager, transaction ledger, multi-account UPI QR switcher with monthly and quarterly limits, local multi-device Wi-Fi range sync, receipt OCR scanner, and client ledgers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
