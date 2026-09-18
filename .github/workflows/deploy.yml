@@ -2,7 +2,7 @@ name: Build and Deploy to Firebase
 
 on:
   push:
-    branches: [ main, master ] # Triggers when you push to main/master
+    branches: [ main, master ]
 
 jobs:
   build_and_distribute:
@@ -17,14 +17,22 @@ jobs:
       with:
         distribution: 'temurin'
         java-version: '17'
+        cache: gradle
 
-    - name: Build Android Release APK
-      run: ./gradlew assembleRelease
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Create default .env file for CI
+      run: |
+        cp .env.example .env
+
+    - name: Build Android Debug APK
+      run: ./gradlew assembleDebug --stacktrace
 
     - name: Upload to Firebase App Distribution
-      uses: wzieba/Firebase-Distribution-Action@v1
+      uses: wzieba/Firebase-Distribution-Github-Action@v1.7.0
       with:
         appId: ${{ secrets.FIREBASE_APP_ID }}
         token: ${{ secrets.FIREBASE_TOKEN }}
-        file: app/build/outputs/apk/release/app-release-unsigned.apk # Adjust path if signed
+        file: app/build/outputs/apk/debug/app-debug.apk
         testers: rohitkumarsoni713@gmail.com
