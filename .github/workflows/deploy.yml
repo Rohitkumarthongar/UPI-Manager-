@@ -29,10 +29,14 @@ jobs:
     - name: Build Android Debug APK
       run: ./gradlew assembleDebug --stacktrace
 
+    - name: Create Service Account Key File
+      run: |
+        echo '${{ secrets.CREDENTIAL_FILE_CONTENT }}' > service_account.json
+
     - name: Upload to Firebase App Distribution
       uses: wzieba/Firebase-Distribution-Github-Action@v1.7.0
       with:
         appId: ${{ secrets.FIREBASE_APP_ID }}
-        serviceCredentialsFileContent: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
+        serviceCredentialsFile: service_account.json
         file: app/build/outputs/apk/debug/app-debug.apk
         testers: rohitkumarsoni713@gmail.com
