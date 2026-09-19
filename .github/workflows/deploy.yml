@@ -33,17 +33,17 @@ jobs:
     - name: Setup Firebase Service Account Credentials
       run: |
         python3 -c '
-import os, base64, json
-content = os.environ.get("SECRET_CONTENT", "").strip()
-try:
-    decoded = base64.b64decode(content).decode("utf-8")
-    json.loads(decoded)
-    data = decoded
-except Exception:
-    data = content
-with open("service_account.json", "w") as f:
-    f.write(data)
-'
+        import os, base64, json
+        content = os.environ.get("SECRET_CONTENT", "").strip()
+        try:
+            decoded = base64.b64decode(content).decode("utf-8")
+            json.loads(decoded)
+            data = decoded
+        except Exception:
+            data = content
+        with open("service_account.json", "w") as f:
+            f.write(data)
+        '
         echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/service_account.json" >> $GITHUB_ENV
       env:
         SECRET_CONTENT: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
