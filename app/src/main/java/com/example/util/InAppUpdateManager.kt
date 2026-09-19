@@ -5,7 +5,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -194,6 +196,16 @@ object InAppUpdateManager {
    */
   fun promptInstallApk(context: Context, apkFile: File) {
     try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+        val manageIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+          data = Uri.parse("package:${context.packageName}")
+          flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(manageIntent)
+        Toast.makeText(context, "Please allow 'Install Unknown Apps' permission to install update", Toast.LENGTH_LONG).show()
+        return
+      }
+
       val apkUri: Uri = FileProvider.getUriForFile(
         context,
         "${context.packageName}.fileprovider",
@@ -207,6 +219,7 @@ object InAppUpdateManager {
       context.startActivity(intent)
     } catch (e: Exception) {
       Log.e(TAG, "Failed to launch package installer", e)
+      Toast.makeText(context, "Failed to launch installer: ${e.message}", Toast.LENGTH_LONG).show()
     }
   }
 }

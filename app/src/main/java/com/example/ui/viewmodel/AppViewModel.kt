@@ -192,13 +192,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
       }
 
       val updateAvailable = InAppUpdateManager.isUpdateAvailable(context, config)
-      if (updateAvailable) {
+      if (updateAvailable || isManualCheck) {
         _remoteUpdateConfig.value = config
-        onResult?.invoke(true, "New update available: v${config.latestVersionName}")
-      } else {
-        if (isManualCheck) {
-          onResult?.invoke(false, "You are on the latest version.")
-        }
+        onResult?.invoke(true, "Version v${config.latestVersionName} available")
       }
     }
   }
