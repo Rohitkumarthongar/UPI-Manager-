@@ -1,6 +1,10 @@
 package com.example
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
@@ -11,8 +15,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.core.content.ContextCompat
+import com.example.ui.dialogs.InAppUpdateDialog
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -124,6 +130,11 @@ fun MainAppContent(viewModel: AppViewModel) {
   val isOcrProcessing by viewModel.isOcrProcessing.collectAsStateWithLifecycle()
   val parsedReceipt by viewModel.parsedReceipt.collectAsStateWithLifecycle()
 
+  // In-App Update States
+  val remoteUpdateConfig by viewModel.remoteUpdateConfig.collectAsStateWithLifecycle()
+  val isDownloadingUpdate by viewModel.isDownloadingUpdate.collectAsStateWithLifecycle()
+  val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
+
   // Multi-Device Range Sync States
   val isHostingSync by viewModel.isHostingServer.collectAsStateWithLifecycle()
   val serverIp by viewModel.serverIpAddress.collectAsStateWithLifecycle()
@@ -145,13 +156,19 @@ fun MainAppContent(viewModel: AppViewModel) {
   var showMultiDeviceSyncScreen by remember { mutableStateOf(false) }
   var pendingReceiptToEdit by remember { mutableStateOf<ParsedReceipt?>(null) }
 
-  // Startup Runtime Permissions Request (Camera & Notifications)
+  // Startup Runtime Permissions Request (Camera, SMS & Notifications) & Update Check
   val permissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestMultiplePermissions()
   ) { _ -> }
 
   LaunchedEffect(Unit) {
-    val permissionsToRequest = mutableListOf(Manifest.permission.CAMERA)
+    viewModel.checkForAppUpdate(context)
+
+    val permissionsToRequest = mutableListOf(
+      Manifest.permission.CAMERA,
+      Manifest.permission.READ_SMS,
+      Manifest.permission.RECEIVE_SMS
+    )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
     }
@@ -160,6 +177,46 @@ fun MainAppContent(viewModel: AppViewModel) {
     }
     if (ungranted.isNotEmpty()) {
       permissionLauncher.launch(ungranted.toTypedArray())
+    }
+  }
+
+  // SMS Payment Broadcast Receiver
+  DisposableEffect(context) {
+    val smsReceiver = object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        if (intent?.action == "com.example.ACTION_PAYMENT_SMS_RECEIVED") {
+          val id = intent.getStringExtra("EXTRA_DRAFT_ID") ?: return
+          val sender = intent.getStringExtra("EXTRA_SENDER") ?: "SMS"
+          val amount = intent.getDoubleExtra("EXTRA_AMOUNT", 0.0)
+          val type = intent.getStringExtra("EXTRA_TYPE") ?: "INCOME"
+          val raw = intent.getStringExtra("EXTRA_RAW") ?: ""
+          val party = intent.getStringExtra("EXTRA_PARTY") ?: "Bank SMS"
+          val ref = intent.getStringExtra("EXTRA_REF")
+
+          val draft = NotificationDraft(
+            id = id,
+            senderApp = sender,
+            amount = amount,
+            type = type,
+            rawText = raw,
+            senderOrReceiver = party,
+            timestamp = System.currentTimeMillis(),
+            upiReference = ref
+          )
+          viewModel.addSmsPaymentDraft(draft)
+          Toast.makeText(context, "Payment SMS detected: ₹$amount", Toast.LENGTH_SHORT).show()
+        }
+      }
+    }
+    val filter = IntentFilter("com.example.ACTION_PAYMENT_SMS_RECEIVED")
+    ContextCompat.registerReceiver(
+      context,
+      smsReceiver,
+      filter,
+      ContextCompat.RECEIVER_NOT_EXPORTED
+    )
+    onDispose {
+      try { context.unregisterReceiver(smsReceiver) } catch (_: Exception) {}
     }
   }
 
@@ -555,6 +612,17 @@ fun MainAppContent(viewModel: AppViewModel) {
         )
       },
       onBack = { showMultiDeviceSyncScreen = false }
+    )
+  }
+
+  // In-App Update Dialog
+  remoteUpdateConfig?.let { config ->
+    InAppUpdateDialog(
+      config = config,
+      isDownloading = isDownloadingUpdate,
+      downloadProgress = downloadProgress,
+      onStartUpdate = { viewModel.startAppUpdate(context, config) },
+      onDismiss = { viewModel.dismissUpdateDialog() }
     )
   }
 }

@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -23,6 +24,8 @@ import com.example.sync.SyncPayload
 import com.example.sync.SyncResponse
 import com.example.sync.SyncTransactionDto
 import com.example.sync.SyncUpiAccountDto
+import com.example.util.AppVersionConfig
+import com.example.util.InAppUpdateManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -150,6 +153,47 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
   fun addTestNotificationDraft(draft: NotificationDraft) {
     _notificationDrafts.value = listOf(draft) + _notificationDrafts.value
+  }
+
+  fun addSmsPaymentDraft(draft: NotificationDraft) {
+    _notificationDrafts.value = listOf(draft) + _notificationDrafts.value.filterNot { it.id == draft.id }
+  }
+
+  // --- In-App Update State ---
+  private val _remoteUpdateConfig = MutableStateFlow<AppVersionConfig?>(null)
+  val remoteUpdateConfig: StateFlow<AppVersionConfig?> = _remoteUpdateConfig.asStateFlow()
+
+  private val _isDownloadingUpdate = MutableStateFlow(false)
+  val isDownloadingUpdate: StateFlow<Boolean> = _isDownloadingUpdate.asStateFlow()
+
+  private val _downloadProgress = MutableStateFlow(0)
+  val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
+
+  fun checkForAppUpdate(context: Context, configUrl: String = InAppUpdateManager.DEFAULT_VERSION_URL) {
+    viewModelScope.launch {
+      val config = InAppUpdateManager.fetchRemoteVersionConfig(configUrl)
+      if (config != null && InAppUpdateManager.isUpdateAvailable(context, config)) {
+        _remoteUpdateConfig.value = config
+      }
+    }
+  }
+
+  fun dismissUpdateDialog() {
+    _remoteUpdateConfig.value = null
+  }
+
+  fun startAppUpdate(context: Context, config: AppVersionConfig) {
+    viewModelScope.launch {
+      _isDownloadingUpdate.value = true
+      _downloadProgress.value = 0
+      val apkFile = InAppUpdateManager.downloadApk(context, config.apkDownloadUrl) { progress ->
+        _downloadProgress.value = progress
+      }
+      _isDownloadingUpdate.value = false
+      if (apkFile != null) {
+        InAppUpdateManager.promptInstallApk(context, apkFile)
+      }
+    }
   }
 
   // --- Task Actions ---
