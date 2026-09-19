@@ -1,11 +1,18 @@
 package com.example
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -137,6 +144,24 @@ fun MainAppContent(viewModel: AppViewModel) {
   var showNotificationInbox by remember { mutableStateOf(false) }
   var showMultiDeviceSyncScreen by remember { mutableStateOf(false) }
   var pendingReceiptToEdit by remember { mutableStateOf<ParsedReceipt?>(null) }
+
+  // Startup Runtime Permissions Request (Camera & Notifications)
+  val permissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestMultiplePermissions()
+  ) { _ -> }
+
+  LaunchedEffect(Unit) {
+    val permissionsToRequest = mutableListOf(Manifest.permission.CAMERA)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    val ungranted = permissionsToRequest.filter {
+      ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+    }
+    if (ungranted.isNotEmpty()) {
+      permissionLauncher.launch(ungranted.toTypedArray())
+    }
+  }
 
   Scaffold(
     modifier = Modifier.fillMaxSize().testTag("main_scaffold"),

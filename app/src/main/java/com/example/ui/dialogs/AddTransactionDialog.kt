@@ -1,10 +1,13 @@
 package com.example.ui.dialogs
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -60,6 +63,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import com.example.data.model.Client
 import com.example.data.model.TransactionItem
 import com.example.data.model.UpiAccount
@@ -97,9 +101,9 @@ fun AddTransactionDialog(
   var amountText by remember {
     mutableStateOf(prefilledReceipt?.amount?.let { String.format(java.util.Locale.US, "%.2f", it) } ?: "")
   }
-  var type by remember { mutableStateOf("EXPENSE") }
+  var type by remember { mutableStateOf(prefilledReceipt?.type ?: "EXPENSE") }
   var selectedCategory by remember {
-    mutableStateOf(prefilledReceipt?.suggestedCategory ?: "Inventory")
+    mutableStateOf(prefilledReceipt?.suggestedCategory ?: "Sales")
   }
   var selectedAccountId by remember {
     mutableStateOf<Long?>(upiAccounts.firstOrNull { it.isActive }?.id ?: upiAccounts.firstOrNull()?.id)
@@ -108,7 +112,9 @@ fun AddTransactionDialog(
   var note by remember {
     mutableStateOf(
       if (prefilledReceipt != null) {
-        "Scanned Receipt (${prefilledReceipt.invoiceNo ?: "OCR"})"
+        val ref = prefilledReceipt.invoiceNo?.let { "Ref/UTR: $it" }
+        val upi = prefilledReceipt.upiId?.let { "VPA: $it" }
+        listOfNotNull(ref, upi).joinToString(" • ").ifBlank { "Scanned Payment Receipt" }
       } else ""
     )
   }
@@ -138,6 +144,17 @@ fun AddTransactionDialog(
   ) { bitmap: Bitmap? ->
     bitmap?.let {
       onScanReceiptRequest?.invoke(it)
+    }
+  }
+
+  // Camera permission launcher
+  val cameraPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission()
+  ) { isGranted ->
+    if (isGranted) {
+      cameraLauncher.launch(null)
+    } else {
+      Toast.makeText(context, "Camera permission is required to capture payment screenshots & receipts", Toast.LENGTH_SHORT).show()
     }
   }
 
@@ -231,7 +248,17 @@ fun AddTransactionDialog(
             } else {
               Row {
                 IconButton(
-                  onClick = { cameraLauncher.launch(null) },
+                  onClick = {
+                    val hasCamPermission = ContextCompat.checkSelfPermission(
+                      context,
+                      Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (hasCamPermission) {
+                      cameraLauncher.launch(null)
+                    } else {
+                      cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                  },
                   modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
