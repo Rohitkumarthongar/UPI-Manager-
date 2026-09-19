@@ -3,6 +3,7 @@ package com.example.util
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Telephony
 import android.telephony.SmsMessage
 import android.util.Log
@@ -24,14 +25,18 @@ object SmsPaymentParser {
         lower.contains("upi") ||
         lower.contains("vpa") ||
         lower.contains("a/c") ||
-        lower.contains("acct")
+        lower.contains("acct") ||
+        lower.contains("utr") ||
+        lower.contains("txn") ||
+        lower.contains("transferred")
 
     if (!isPaymentSms) return null
 
     // Determine type (INCOME vs EXPENSE)
     val isIncome = lower.contains("credited") ||
         lower.contains("received") ||
-        lower.contains("credit")
+        lower.contains("credit") ||
+        lower.contains("recvd")
 
     val type = if (isIncome) "INCOME" else "EXPENSE"
 
@@ -72,6 +77,41 @@ object SmsPaymentParser {
       upiReference = reference
     )
   }
+
+  fun readRealSmsInboxPayments(context: Context): List<NotificationDraft> {
+    val drafts = mutableListOf<NotificationDraft>()
+    try {
+      val uri = Uri.parse("content://sms/inbox")
+      val projection = arrayOf("address", "body", "date")
+      val cursor = context.contentResolver.query(
+        uri,
+        projection,
+        null,
+        null,
+        "date DESC LIMIT 50"
+      )
+
+      cursor?.use { c ->
+        val addressIndex = c.getColumnIndex("address")
+        val bodyIndex = c.getColumnIndex("body")
+        val dateIndex = c.getColumnIndex("date")
+
+        while (c.moveToNext()) {
+          val address = if (addressIndex >= 0) c.getString(addressIndex) else ""
+          val body = if (bodyIndex >= 0) c.getString(bodyIndex) else ""
+          val date = if (dateIndex >= 0) c.getLong(dateIndex) else System.currentTimeMillis()
+
+          val parsedDraft = parseSmsText(address, body)
+          if (parsedDraft != null) {
+            drafts.add(parsedDraft.copy(timestamp = date))
+          }
+        }
+      }
+    } catch (e: Exception) {
+      Log.e("SmsPaymentReceiver", "Error reading SMS inbox", e)
+    }
+    return drafts.distinctBy { it.upiReference ?: it.rawText }
+  }
 }
 
 class SmsPaymentReceiver : BroadcastReceiver() {
@@ -90,7 +130,6 @@ class SmsPaymentReceiver : BroadcastReceiver() {
         val draft = SmsPaymentParser.parseSmsText(sender, body)
         if (draft != null) {
           Log.d("SmsPaymentReceiver", "Parsed payment SMS: ${draft.amount} (${draft.type})")
-          // Broadcast intent locally to MainActivity / AppViewModel
           val broadcastIntent = Intent("com.example.ACTION_PAYMENT_SMS_RECEIVED").apply {
             putExtra("EXTRA_DRAFT_ID", draft.id)
             putExtra("EXTRA_SENDER", draft.senderApp)

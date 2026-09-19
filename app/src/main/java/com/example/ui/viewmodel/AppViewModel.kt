@@ -26,6 +26,8 @@ import com.example.sync.SyncTransactionDto
 import com.example.sync.SyncUpiAccountDto
 import com.example.util.AppVersionConfig
 import com.example.util.InAppUpdateManager
+import com.example.util.SmsPaymentParser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -151,12 +153,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     _notificationDrafts.value = _notificationDrafts.value.filterNot { it.id == draftId }
   }
 
-  fun addTestNotificationDraft(draft: NotificationDraft) {
-    _notificationDrafts.value = listOf(draft) + _notificationDrafts.value
-  }
-
   fun addSmsPaymentDraft(draft: NotificationDraft) {
     _notificationDrafts.value = listOf(draft) + _notificationDrafts.value.filterNot { it.id == draft.id }
+  }
+
+  fun scanBankSmsInbox(context: Context) {
+    viewModelScope.launch(Dispatchers.IO) {
+      val realDrafts = SmsPaymentParser.readRealSmsInboxPayments(context)
+      if (realDrafts.isNotEmpty()) {
+        _notificationDrafts.value = (realDrafts + _notificationDrafts.value).distinctBy { it.id }
+      }
+    }
   }
 
   // --- In-App Update State ---

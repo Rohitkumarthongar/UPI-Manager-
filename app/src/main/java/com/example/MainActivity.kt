@@ -555,19 +555,9 @@ fun MainAppContent(viewModel: AppViewModel) {
       onDismissDraft = { draftId ->
         viewModel.dismissNotificationDraft(draftId)
       },
-      onAddTestNotification = {
-        val testDraft = NotificationDraft(
-          id = "sim_${System.currentTimeMillis()}",
-          senderApp = "Paytm",
-          amount = (100..5000).random().toDouble(),
-          type = if (listOf(true, false).random()) "INCOME" else "EXPENSE",
-          rawText = "Received ₹${(100..5000).random()} from Apex Tech via UPI",
-          senderOrReceiver = "Apex Tech",
-          timestamp = System.currentTimeMillis(),
-          upiReference = "UPI/908234123"
-        )
-        viewModel.addTestNotificationDraft(testDraft)
-        Toast.makeText(context, "Simulated payment notification received!", Toast.LENGTH_SHORT).show()
+      onSyncSmsInbox = {
+        viewModel.scanBankSmsInbox(context)
+        Toast.makeText(context, "Scanning bank SMS inbox for payment alerts...", Toast.LENGTH_SHORT).show()
       },
       onClose = { showNotificationInbox = false }
     )

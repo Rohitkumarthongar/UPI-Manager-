@@ -52,7 +52,7 @@ fun NotificationInboxDialog(
   drafts: List<NotificationDraft>,
   onConfirmDraft: (NotificationDraft) -> Unit,
   onDismissDraft: (String) -> Unit,
-  onAddTestNotification: () -> Unit,
+  onSyncSmsInbox: () -> Unit,
   onClose: () -> Unit
 ) {
   val timeFormat = SimpleDateFormat("hh:mm a", Locale.getDefault())
@@ -116,7 +116,7 @@ fun NotificationInboxDialog(
           EmptyStateView(
             icon = Icons.Default.Payments,
             title = "Inbox is Empty",
-            subtitle = "No unconfirmed payment notifications.\nTest notification listener below to simulate payment alert."
+            subtitle = "No unconfirmed payment notifications.\nClick below to scan SMS inbox for bank payment alerts."
           )
         } else {
           LazyColumn(
@@ -136,17 +136,17 @@ fun NotificationInboxDialog(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Simulation Test Trigger
+        // SMS Inbox Sync Button
         OutlinedButton(
-          onClick = onAddTestNotification,
+          onClick = onSyncSmsInbox,
           shape = RoundedCornerShape(12.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .testTag("simulate_payment_notification_button")
+            .testTag("sync_sms_inbox_button")
         ) {
           Icon(Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(8.dp))
-          Text("Simulate UPI Payment Notification", style = MaterialTheme.typography.labelLarge)
+          Text("Scan Bank SMS Inbox for Payments", style = MaterialTheme.typography.labelLarge)
         }
       }
     }
