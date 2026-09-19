@@ -30,10 +30,23 @@ jobs:
     - name: Build Android Debug APK
       run: ./gradlew assembleDebug --stacktrace
 
-    - name: Authenticate with Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
+    - name: Setup Firebase Service Account Credentials
+      run: |
+        python3 -c '
+import os, base64, json
+content = os.environ.get("SECRET_CONTENT", "").strip()
+try:
+    decoded = base64.b64decode(content).decode("utf-8")
+    json.loads(decoded)
+    data = decoded
+except Exception:
+    data = content
+with open("service_account.json", "w") as f:
+    f.write(data)
+'
+        echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/service_account.json" >> $GITHUB_ENV
+      env:
+        SECRET_CONTENT: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
