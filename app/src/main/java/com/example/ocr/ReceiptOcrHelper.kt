@@ -1,6 +1,9 @@
 package com.example.ocr
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Build
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -28,7 +31,30 @@ object ReceiptOcrHelper {
 
   suspend fun parseReceiptImage(bitmap: Bitmap): ParsedReceipt {
     return try {
-      val image = InputImage.fromBitmap(bitmap, 0)
+      val softwareBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE) {
+        bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: bitmap
+      } else {
+        bitmap
+      }
+      val image = InputImage.fromBitmap(softwareBitmap, 0)
+      val visionText = suspendCancellableCoroutine { continuation ->
+        recognizer.process(image)
+          .addOnSuccessListener { text ->
+            if (continuation.isActive) continuation.resume(text.text)
+          }
+          .addOnFailureListener {
+            if (continuation.isActive) continuation.resume("")
+          }
+      }
+      extractReceiptDetails(visionText)
+    } catch (e: Exception) {
+      extractReceiptDetails("")
+    }
+  }
+
+  suspend fun parseReceiptUri(context: Context, uri: Uri): ParsedReceipt {
+    return try {
+      val image = InputImage.fromFilePath(context, uri)
       val visionText = suspendCancellableCoroutine { continuation ->
         recognizer.process(image)
           .addOnSuccessListener { text ->
@@ -112,7 +138,6 @@ object ReceiptOcrHelper {
             break
           }
         }
-        // Handle next-line Transaction ID (e.g. Line 1: "PhonePe Transaction ID", Line 2: "T2608141754066026713528")
         if (line.contains("Transaction ID", ignoreCase = true) || line.contains("Txn ID", ignoreCase = true)) {
           if (i + 1 < lines.size) {
             val nextLine = lines[i + 1]
@@ -173,7 +198,6 @@ object ReceiptOcrHelper {
     // 5. Extract Payee / Payer / Vendor Name
     var vendorName: String? = null
 
-    // Check multi-line "Paid to" or "Received from" or "To:" or "From:" (e.g. Line 1: "Paid to", Line 2: "Puniya tyres")
     for (i in lines.indices) {
       val line = lines[i]
       val lowerLine = line.lowercase()
@@ -194,7 +218,6 @@ object ReceiptOcrHelper {
       }
     }
 
-    // Inline payee/payer check
     if (vendorName == null) {
       val payeePayerPattern = Pattern.compile(
         "\\b(?:paid to|transfer to|sent to|received from|paid by|merchant|to|from)\\b\\s*[:=-]?\\s*([A-Za-z0-9\\s&.-]{3,35})",
@@ -221,7 +244,6 @@ object ReceiptOcrHelper {
       }
     }
 
-    // Header line fallback
     if (vendorName == null) {
       for (i in 0 until minOf(4, lines.size)) {
         val line = lines[i]
