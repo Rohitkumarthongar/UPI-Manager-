@@ -141,30 +141,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   // --- Notification Draft Inbox ---
-  private val _notificationDrafts = MutableStateFlow<List<NotificationDraft>>(
-    listOf(
-      NotificationDraft(
-        id = "draft_1",
-        senderApp = "PhonePe",
-        amount = 1850.0,
-        type = "INCOME",
-        rawText = "Received ₹1,850.00 from Rajesh Verma via PhonePe UPI",
-        senderOrReceiver = "Rajesh Verma",
-        timestamp = System.currentTimeMillis() - 3600000L * 2,
-        upiReference = "UPI/4289019283"
-      ),
-      NotificationDraft(
-        id = "draft_2",
-        senderApp = "Google Pay",
-        amount = 450.0,
-        type = "EXPENSE",
-        rawText = "Paid ₹450.00 to Chai Point Bangalore",
-        senderOrReceiver = "Chai Point",
-        timestamp = System.currentTimeMillis() - 3600000L * 5,
-        upiReference = "UPI/4289019912"
-      )
-    )
-  )
+  private val _notificationDrafts = MutableStateFlow<List<NotificationDraft>>(emptyList())
   val notificationDrafts: StateFlow<List<NotificationDraft>> = _notificationDrafts.asStateFlow()
 
   fun dismissNotificationDraft(draftId: String) {
