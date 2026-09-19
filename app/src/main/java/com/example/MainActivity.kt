@@ -472,6 +472,12 @@ fun MainAppContent(viewModel: AppViewModel) {
           upiAccounts = upiAccounts,
           isDarkMode = isDark,
           onToggleDarkMode = { viewModel.toggleDarkMode() },
+          onCheckUpdate = {
+            Toast.makeText(context, "Checking for updates...", Toast.LENGTH_SHORT).show()
+            viewModel.checkForAppUpdate(context, isManualCheck = true) { _, msg ->
+              Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+          },
           onPayBill = { bill, accId ->
             viewModel.payRecurringBill(bill, accId)
             Toast.makeText(context, "Paid: ${bill.title}", Toast.LENGTH_SHORT).show()

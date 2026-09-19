@@ -31,24 +31,43 @@ object InAppUpdateManager {
   const val DEFAULT_VERSION_URL = "https://upi-manager-b2087.web.app/version.json"
 
   /**
-   * Fetches the remote version.json file asynchronously.
+   * Fetches the remote version.json file asynchronously with redirect support.
    */
   suspend fun fetchRemoteVersionConfig(configUrl: String = DEFAULT_VERSION_URL): AppVersionConfig? {
     return withContext(Dispatchers.IO) {
       try {
-        val url = URL(configUrl)
-        val connection = url.openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.connectTimeout = 8000
-        connection.readTimeout = 8000
+        var currentUrl = configUrl
+        var redirectCount = 0
 
-        if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-          val responseText = connection.inputStream.bufferedReader().use { it.readText() }
-          parseVersionJson(responseText)
-        } else {
-          Log.e(TAG, "HTTP Error fetching version.json: ${connection.responseCode}")
-          null
+        while (redirectCount < 5) {
+          val url = URL(currentUrl)
+          val connection = url.openConnection() as HttpURLConnection
+          connection.instanceFollowRedirects = true
+          connection.requestMethod = "GET"
+          connection.connectTimeout = 8000
+          connection.readTimeout = 8000
+
+          val status = connection.responseCode
+          if (status == HttpURLConnection.HTTP_MOVED_TEMP ||
+            status == HttpURLConnection.HTTP_MOVED_PERM ||
+            status == 307 || status == 308
+          ) {
+            val newUrl = connection.getHeaderField("Location")
+            if (newUrl.isNullOrBlank()) break
+            currentUrl = newUrl
+            redirectCount++
+            continue
+          }
+
+          if (status == HttpURLConnection.HTTP_OK) {
+            val responseText = connection.inputStream.bufferedReader().use { it.readText() }
+            return@withContext parseVersionJson(responseText)
+          } else {
+            Log.e(TAG, "HTTP Error fetching version.json: $status")
+            break
+          }
         }
+        null
       } catch (e: Exception) {
         Log.e(TAG, "Error checking for remote update", e)
         null
@@ -106,12 +125,36 @@ object InAppUpdateManager {
   ): File? {
     return withContext(Dispatchers.IO) {
       try {
-        val url = URL(apkUrl)
-        val connection = url.openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.connectTimeout = 10000
-        connection.readTimeout = 20000
-        connection.connect()
+        var currentUrl = apkUrl
+        var redirectCount = 0
+        var connection: HttpURLConnection? = null
+
+        while (redirectCount < 5) {
+          val url = URL(currentUrl)
+          connection = url.openConnection() as HttpURLConnection
+          connection.instanceFollowRedirects = true
+          connection.requestMethod = "GET"
+          connection.connectTimeout = 10000
+          connection.readTimeout = 20000
+
+          val status = connection.responseCode
+          if (status == HttpURLConnection.HTTP_MOVED_TEMP ||
+            status == HttpURLConnection.HTTP_MOVED_PERM ||
+            status == 307 || status == 308
+          ) {
+            val newUrl = connection.getHeaderField("Location")
+            if (newUrl.isNullOrBlank()) break
+            currentUrl = newUrl
+            redirectCount++
+            continue
+          }
+          break
+        }
+
+        if (connection == null || connection.responseCode != HttpURLConnection.HTTP_OK) {
+          Log.e(TAG, "Failed to connect for download: ${connection?.responseCode}")
+          return@withContext null
+        }
 
         val fileLength = connection.contentLength
         val apkDir = File(context.cacheDir, "apks")

@@ -176,11 +176,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   private val _downloadProgress = MutableStateFlow(0)
   val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
 
-  fun checkForAppUpdate(context: Context, configUrl: String = InAppUpdateManager.DEFAULT_VERSION_URL) {
+  fun checkForAppUpdate(
+    context: Context,
+    isManualCheck: Boolean = false,
+    configUrl: String = InAppUpdateManager.DEFAULT_VERSION_URL,
+    onResult: ((Boolean, String) -> Unit)? = null
+  ) {
     viewModelScope.launch {
       val config = InAppUpdateManager.fetchRemoteVersionConfig(configUrl)
-      if (config != null && InAppUpdateManager.isUpdateAvailable(context, config)) {
+      if (config == null) {
+        if (isManualCheck) {
+          onResult?.invoke(false, "Could not reach update server. Check version.json URL.")
+        }
+        return@launch
+      }
+
+      val updateAvailable = InAppUpdateManager.isUpdateAvailable(context, config)
+      if (updateAvailable) {
         _remoteUpdateConfig.value = config
+        onResult?.invoke(true, "New update available: v${config.latestVersionName}")
+      } else {
+        if (isManualCheck) {
+          onResult?.invoke(false, "You are on the latest version.")
+        }
       }
     }
   }
