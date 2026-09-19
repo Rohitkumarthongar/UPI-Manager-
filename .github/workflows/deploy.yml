@@ -60,4 +60,5 @@ jobs:
       run: |
         firebase appdistribution:distribute app/build/outputs/apk/debug/app-debug.apk \
           --app "${{ secrets.FIREBASE_APP_ID }}" \
+          --service-account service_account.json \
           --testers "rohitkumarsoni713@gmail.com"
