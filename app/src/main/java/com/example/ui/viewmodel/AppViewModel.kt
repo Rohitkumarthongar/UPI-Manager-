@@ -268,6 +268,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     clientId: Long?,
     note: String,
     vendorName: String?,
+    referenceNumber: String? = null,
     source: String = "MANUAL",
     receiptPath: String? = null
   ) {
@@ -287,7 +288,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         source = source,
         status = "CONFIRMED",
         vendorName = vendorName,
-        timestamp = System.currentTimeMillis()
+        timestamp = System.currentTimeMillis(),
+        referenceNumber = referenceNumber
       )
       repository.insertTransaction(txn)
     }

@@ -510,7 +510,7 @@ fun MainAppContent(viewModel: AppViewModel) {
         showAddTxnDialog = false
         pendingReceiptToEdit = null
       },
-      onSave = { amount, type, category, accId, clientId, note, vendor, source ->
+      onSave = { amount, type, category, accId, clientId, note, vendor, referenceNumber, source ->
         viewModel.addTransaction(
           amount = amount,
           type = type,
@@ -519,6 +519,7 @@ fun MainAppContent(viewModel: AppViewModel) {
           clientId = clientId,
           note = note,
           vendorName = vendor,
+          referenceNumber = referenceNumber,
           source = source
         )
         Toast.makeText(context, "Logged transaction to ledger", Toast.LENGTH_SHORT).show()

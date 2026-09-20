@@ -110,15 +110,27 @@ object ReceiptOcrHelper {
     }
 
     // 3. Extract UTR / Reference ID / Transaction ID / Tracking ID
+    // OCR can split a label and its value across lines (as in PhonePe receipts),
+    // so normalize common punctuation/whitespace before applying the patterns.
+    val normalizedText = rawText
+      .replace('\u00A0', ' ')
+      .replace(Regex("[|]"), "I")
+      .replace(Regex("[ \\t]+"), " ")
     var referenceId: String? = null
 
     // Check UTR explicit pattern e.g. "UTR: 951886448560" or "UTR 951886448560"
     val utrPattern = Pattern.compile("(?:utr|ref\\s*no|upi\\s*ref)\\s*[:#-]?\\s*([A-Za-z0-9]{8,22})", Pattern.CASE_INSENSITIVE)
-    for (line in lines) {
-      val m = utrPattern.matcher(line)
-      if (m.find()) {
-        referenceId = m.group(1)
-        break
+    val normalizedUtrMatcher = utrPattern.matcher(normalizedText)
+    if (normalizedUtrMatcher.find()) {
+      referenceId = normalizedUtrMatcher.group(1)
+    }
+    if (referenceId == null) {
+      for (line in lines) {
+        val m = utrPattern.matcher(line)
+        if (m.find()) {
+          referenceId = m.group(1)
+          break
+        }
       }
     }
 
@@ -165,7 +177,7 @@ object ReceiptOcrHelper {
     // 4. Extract Amount (e.g. ₹22,000 or ₹22,000.00 or Rs. 22000)
     var amount: Double? = null
     val amountPattern = Pattern.compile(
-      "(?:total|grand total|amount|paid|received|due|rs\\.?|₹|inr)\\s*[:=-]?\\s*₹?\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)",
+      "(?:total|grand\\s+total|amount|paid|received|due|rs\\.?|₹|inr)\\s*[:=-]?\\s*₹?\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)",
       Pattern.CASE_INSENSITIVE
     )
 
@@ -181,7 +193,9 @@ object ReceiptOcrHelper {
     }
 
     if (amount == null) {
-      val standaloneAmountPattern = Pattern.compile("₹\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)")
+      // Some OCR engines emit the rupee sign as a standalone line or replace it
+      // with Rs/INR; accept those forms as a final fallback.
+      val standaloneAmountPattern = Pattern.compile("(?:₹|rs\\.?|inr)\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)", Pattern.CASE_INSENSITIVE)
       for (line in lines) {
         val m = standaloneAmountPattern.matcher(line)
         if (m.find()) {
@@ -288,7 +302,12 @@ object ReceiptOcrHelper {
       else -> "Sales"
     }
 
-    val score = if (amount != null && (referenceId != null || vendorName != null)) 0.95f else 0.70f
+    val score = when {
+      amount != null && referenceId != null && vendorName != null -> 0.98f
+      amount != null && (referenceId != null || vendorName != null) -> 0.90f
+      amount != null -> 0.75f
+      else -> 0.35f
+    }
 
     return ParsedReceipt(
       amount = amount,

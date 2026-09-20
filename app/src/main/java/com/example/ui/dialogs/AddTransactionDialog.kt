@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -93,6 +94,7 @@ fun AddTransactionDialog(
     clientId: Long?,
     note: String,
     vendor: String?,
+    referenceNumber: String?,
     source: String
   ) -> Unit
 ) {
@@ -120,6 +122,24 @@ fun AddTransactionDialog(
   }
   var vendor by remember { mutableStateOf(prefilledReceipt?.vendor ?: "") }
   var source by remember { mutableStateOf(if (prefilledReceipt != null) "OCR" else "MANUAL") }
+  var referenceNumber by remember { mutableStateOf(prefilledReceipt?.invoiceNo.orEmpty()) }
+
+  // OCR runs asynchronously while this dialog remains composed. Keep the editable
+  // fields synchronized when a newly parsed receipt is delivered.
+  LaunchedEffect(prefilledReceipt) {
+    prefilledReceipt?.let { receipt ->
+      amountText = receipt.amount?.let { String.format(java.util.Locale.US, "%.2f", it) }.orEmpty()
+      type = receipt.type
+      selectedCategory = receipt.suggestedCategory
+      vendor = receipt.vendor.orEmpty()
+      referenceNumber = receipt.invoiceNo.orEmpty()
+      note = listOfNotNull(
+        receipt.invoiceNo?.let { "Ref/UTR: $it" },
+        receipt.upiId?.let { "VPA: $it" }
+      ).joinToString(" • ").ifBlank { "Scanned Payment Receipt" }
+      source = "OCR"
+    }
+  }
 
   // Gallery image picker launcher for OCR
   val galleryLauncher = rememberLauncherForActivityResult(
@@ -540,6 +560,7 @@ fun AddTransactionDialog(
                 selectedClientId,
                 note,
                 vendor.ifBlank { null },
+                referenceNumber.ifBlank { null },
                 source
               )
               onDismiss()
