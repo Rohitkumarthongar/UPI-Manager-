@@ -64,7 +64,7 @@ For publishing release builds to Google Play or distributing signed APKs/Bundles
 
 `.github/workflows/deploy.yml` builds a **signed release APK** on pushes to `main` or `master`, or a manual Actions run. It publishes `app-release.apk` and `version.json` together to the Hosting site `upi-manager-b2087.web.app`. The app checks `https://upi-manager-b2087.web.app/version.json`; the manifest's `latestVersionCode`, `latestVersionName` and `apkDownloadUrl` are generated from that same build. Hosting deployment replaces the site's deployed files with the contents of `public/` plus the staged APK/manifest; keep any other required Hosting assets in `public/`.
 
-Set these **GitHub Actions repository secrets** before running the deploy workflow:
+Set these **GitHub Actions repository secrets** under your repository's **Settings > Secrets and variables > Actions** before running the deploy workflow. The workflow reports all missing required secret names and stops before building or publishing; it never prints their values.
 
 | Secret | Purpose |
 | --- | --- |
@@ -73,6 +73,17 @@ Set these **GitHub Actions repository secrets** before running the deploy workfl
 | `STORE_PASSWORD` | Keystore password. |
 | `KEY_ALIAS` | Alias of the release key inside that keystore. |
 | `KEY_PASSWORD` | Release key password. |
+
+Use the **original release keystore** that signed the APK already installed by users. From a trusted local shell with GitHub CLI authenticated for this repository, replace `OWNER/REPO` and the local filename below; the base64 data goes straight to the secret via stdin, without printing it:
+
+```bash
+base64 -w0 original-key.jks | gh secret set RELEASE_KEYSTORE_BASE64 --repo OWNER/REPO
+gh secret set STORE_PASSWORD --repo OWNER/REPO
+gh secret set KEY_ALIAS --repo OWNER/REPO
+gh secret set KEY_PASSWORD --repo OWNER/REPO
+```
+
+The last three commands prompt for their values locally; enter the existing keystore's credentials there. Set `CREDENTIAL_FILE_CONTENT` from your Firebase service-account credential in the same repository's Actions secrets settings. Do not paste keystore data or passwords into chat or commit them to the repository. A newly generated or different key cannot replace the original signature for an in-place update.
 
 For optional tester distribution of this **same signed release APK**, also set `FIREBASE_APP_ID` and `FIREBASE_TESTERS` (comma-separated tester email addresses). No debug-key APK is published as an update. The Firebase project used by the workflow must be `upi-manager-b2087`, matching the app's update URL and Firebase configuration. The service account needs the necessary Hosting permissions (and App Distribution permissions if enabled); the workflow authenticates using `GOOGLE_APPLICATION_CREDENTIALS`.
 

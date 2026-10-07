@@ -35,12 +35,16 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          missing=()
           for name in CREDENTIAL_FILE_CONTENT RELEASE_KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
             if [[ -z "${!name}" ]]; then
-              echo "::error::Required secret $name is missing"
-              exit 1
+              missing+=("$name")
             fi
           done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing required GitHub Actions repository secrets: ${missing[*]}. Add them under repository Settings > Secrets and variables > Actions."
+            exit 1
+          fi
 
       - name: Prepare signing and service account
         env:
