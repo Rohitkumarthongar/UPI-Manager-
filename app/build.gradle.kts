@@ -11,6 +11,17 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+// CI supplies both values for the APK and the Hosting manifest; local builds keep a usable default.
+val releaseVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.let { raw ->
+  raw.toIntOrNull()?.takeIf { it in 3..2_100_000_000 }
+    ?: error("releaseVersionCode must be an integer from 3 to 2100000000")
+} ?: 3
+val releaseVersionName = providers.gradleProperty("releaseVersionName").orNull?.also { name ->
+  require(name.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,49}"))) {
+    "releaseVersionName must be 1-50 alphanumeric, dot, underscore or hyphen characters"
+  }
+} ?: "1.2.0"
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -19,8 +30,8 @@ android {
     applicationId = "com.aistudio.offlineledger.vknpxq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = releaseVersionCode
+    versionName = releaseVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -105,6 +116,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.work.runtime.ktx)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -141,6 +153,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.work.testing)
   testImplementation(libs.roborazzi)
   testImplementation(libs.roborazzi.compose)
   testImplementation(libs.roborazzi.junit.rule)

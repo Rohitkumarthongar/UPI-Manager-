@@ -47,6 +47,8 @@ object InAppUpdateManager {
           connection.instanceFollowRedirects = true
           connection.requestMethod = "GET"
           connection.connectTimeout = 8000
+          connection.useCaches = false
+          connection.setRequestProperty("Cache-Control", "no-cache")
           connection.readTimeout = 8000
 
           val status = connection.responseCode
@@ -80,10 +82,14 @@ object InAppUpdateManager {
   fun parseVersionJson(jsonString: String): AppVersionConfig? {
     return try {
       val json = JSONObject(jsonString)
+      val code = json.optLong("latestVersionCode", 0L)
+      val name = json.optString("latestVersionName", "")
+      val apkUrl = json.optString("apkDownloadUrl", "")
+      if (code <= 0 || name.isBlank() || Uri.parse(apkUrl).scheme != "https" || Uri.parse(apkUrl).host.isNullOrBlank()) return null
       AppVersionConfig(
-        latestVersionCode = json.optLong("latestVersionCode", 1L),
-        latestVersionName = json.optString("latestVersionName", "1.0"),
-        apkDownloadUrl = json.optString("apkDownloadUrl", ""),
+        latestVersionCode = code,
+        latestVersionName = name,
+        apkDownloadUrl = apkUrl,
         isMandatory = json.optBoolean("isMandatory", false),
         releaseNotes = json.optString("releaseNotes", "New update available!")
       )
@@ -183,6 +189,11 @@ object InAppUpdateManager {
             output.flush()
           }
         }
+        if (apkFile.length() == 0L || (fileLength > 0 && apkFile.length() != fileLength.toLong())) {
+          apkFile.delete()
+          return@withContext null
+        }
+        withContext(Dispatchers.Main) { onProgress(100) }
         apkFile
       } catch (e: Exception) {
         Log.e(TAG, "Error downloading APK", e)
@@ -197,6 +208,7 @@ object InAppUpdateManager {
   fun promptInstallApk(context: Context, apkFile: File) {
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+        context.getSharedPreferences("app_update", Context.MODE_PRIVATE).edit().putBoolean("pending_install", true).apply()
         val manageIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
           data = Uri.parse("package:${context.packageName}")
           flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -217,9 +229,20 @@ object InAppUpdateManager {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
       }
       context.startActivity(intent)
+      context.getSharedPreferences("app_update", Context.MODE_PRIVATE).edit().remove("pending_install").apply()
     } catch (e: Exception) {
       Log.e(TAG, "Failed to launch package installer", e)
       Toast.makeText(context, "Failed to launch installer: ${e.message}", Toast.LENGTH_LONG).show()
     }
+  }
+
+  /** Only resume a download the user already requested, after Android grants install access. */
+  fun resumePendingInstall(context: Context) {
+    val prefs = context.getSharedPreferences("app_update", Context.MODE_PRIVATE)
+    if (!prefs.getBoolean("pending_install", false)) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) return
+    val apk = File(context.cacheDir, "apks/update.apk")
+    if (apk.exists() && apk.length() > 0) promptInstallApk(context, apk)
+    else prefs.edit().remove("pending_install").apply()
   }
 }

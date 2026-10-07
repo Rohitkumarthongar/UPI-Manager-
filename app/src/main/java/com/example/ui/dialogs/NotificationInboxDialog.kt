@@ -116,7 +116,7 @@ fun NotificationInboxDialog(
           EmptyStateView(
             icon = Icons.Default.Payments,
             title = "Inbox is Empty",
-            subtitle = "No unconfirmed payment notifications.\nClick below to scan SMS inbox for bank payment alerts."
+            subtitle = "No unconfirmed payment alerts.\nBank SMS is scanned with permission; you can also import manually."
           )
         } else {
           LazyColumn(

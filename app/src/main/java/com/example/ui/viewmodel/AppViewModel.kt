@@ -2,6 +2,8 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -26,7 +28,11 @@ import com.example.sync.SyncTransactionDto
 import com.example.sync.SyncUpiAccountDto
 import com.example.util.AppVersionConfig
 import com.example.util.InAppUpdateManager
+import com.example.util.UpdateCheckStore
+import com.example.util.UpdateChecks
 import com.example.util.SmsPaymentParser
+import com.example.util.SmsDraftStore
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -38,6 +44,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 enum class NavigationTab {
   DASHBOARD,
@@ -134,10 +143,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   fun processReceiptImage(bitmap: Bitmap, onDone: (ParsedReceipt) -> Unit) {
     viewModelScope.launch {
       _isOcrProcessing.value = true
-      val parsed = ReceiptOcrHelper.parseReceiptImage(bitmap)
-      _parsedReceipt.value = parsed
-      _isOcrProcessing.value = false
-      onDone(parsed)
+      try {
+        val parsed = ReceiptOcrHelper.parseReceiptImage(bitmap)
+        _parsedReceipt.value = parsed
+        onDone(parsed)
+      } catch (e: Exception) {
+        android.util.Log.e("AppViewModel", "Receipt scan failed", e)
+      } finally {
+        _isOcrProcessing.value = false
+      }
     }
   }
 
@@ -148,20 +162,75 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   // --- Notification Draft Inbox ---
   private val _notificationDrafts = MutableStateFlow<List<NotificationDraft>>(emptyList())
   val notificationDrafts: StateFlow<List<NotificationDraft>> = _notificationDrafts.asStateFlow()
+  private val smsStore = SmsDraftStore(application)
+  private val smsDecisionLock = Mutex()
+
+  init { _notificationDrafts.value = smsStore.pending() }
+
+  fun refreshSmsDrafts(): Int {
+    val previous = _notificationDrafts.value.map { it.id }.toSet()
+    val current = smsStore.pending()
+    _notificationDrafts.value = current
+    return current.count { it.id !in previous }
+  }
 
   fun dismissNotificationDraft(draftId: String) {
-    _notificationDrafts.value = _notificationDrafts.value.filterNot { it.id == draftId }
+    smsStore.decide(draftId)
+    refreshSmsDrafts()
   }
 
   fun addSmsPaymentDraft(draft: NotificationDraft) {
-    _notificationDrafts.value = listOf(draft) + _notificationDrafts.value.filterNot { it.id == draft.id }
+    smsStore.add(draft)
+    refreshSmsDrafts()
   }
 
-  fun scanBankSmsInbox(context: Context) {
-    viewModelScope.launch(Dispatchers.IO) {
-      val realDrafts = SmsPaymentParser.readRealSmsInboxPayments(context)
-      if (realDrafts.isNotEmpty()) {
-        _notificationDrafts.value = (realDrafts + _notificationDrafts.value).distinctBy { it.id }
+  fun scanBankSmsInbox(context: Context, onResult: (Int?, String) -> Unit = { _, _ -> }) {
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+      onResult(null, "SMS inbox permission is needed to import bank alerts")
+      return
+    }
+    viewModelScope.launch {
+      try {
+        val added = withContext(Dispatchers.IO) {
+          val drafts = SmsPaymentParser.readRealSmsInboxPayments(context)
+          drafts.count { smsStore.add(it) }
+        }
+        refreshSmsDrafts()
+        onResult(added, if (added == 0) "No new payment alerts found" else "$added payment alert(s) ready to review")
+      } catch (e: Exception) {
+        onResult(null, "Could not read SMS inbox: ${e.localizedMessage ?: "unknown error"}")
+      }
+    }
+  }
+
+  fun confirmSmsDraft(draft: NotificationDraft, accountId: Long?, onResult: (Boolean, String) -> Unit) {
+    viewModelScope.launch {
+      smsDecisionLock.withLock {
+        if (smsStore.pending().none { it.id == draft.id }) {
+          onResult(false, "This alert has already been handled")
+          return@withLock
+        }
+        try {
+          val existing = repository.allTransactions.first().any { txn ->
+            txn.type == draft.type && txn.amount == draft.amount &&
+              ((txn.referenceNumber == (draft.upiReference ?: draft.id)) ||
+                (txn.source == "SMS" && txn.timestamp == draft.timestamp && txn.note == "${draft.senderApp}: ${draft.rawText}"))
+          }
+          if (!existing) {
+            val note = "${draft.senderApp}: ${draft.rawText}"
+            repository.insertTransaction(TransactionItem(
+              amount = draft.amount, type = draft.type, category = "UPI Transfer",
+              accountId = accountId, note = note,
+              encryptedNote = CryptoManager.encrypt(note), vendorName = draft.senderOrReceiver,
+              source = "SMS", timestamp = draft.timestamp,
+              referenceNumber = draft.upiReference ?: draft.id
+            ))
+          }
+          dismissNotificationDraft(draft.id)
+          onResult(true, if (existing) "Already in ledger; alert reconciled" else "Posted into ledger")
+        } catch (e: Exception) {
+          onResult(false, "Could not save alert: ${e.localizedMessage ?: "unknown error"}")
+        }
       }
     }
   }
@@ -176,6 +245,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   private val _downloadProgress = MutableStateFlow(0)
   val downloadProgress: StateFlow<Int> = _downloadProgress.asStateFlow()
 
+  private val updateStore = UpdateCheckStore(application)
+
+  /** Resume displays a persisted discovery, even when the periodic worker ran while the app was closed. */
+  fun refreshCachedUpdate(context: Context, fromNotification: Boolean = false) {
+    val installed = UpdateChecks.installedVersion(context)
+    val config = if (fromNotification) updateStore.available(installed) else updateStore.visible(installed)
+    if (config != null) _remoteUpdateConfig.value = config
+    else if (_remoteUpdateConfig.value?.latestVersionCode?.let { it <= installed } == true) _remoteUpdateConfig.value = null
+  }
+
   fun checkForAppUpdate(
     context: Context,
     isManualCheck: Boolean = false,
@@ -183,7 +262,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     onResult: ((Boolean, String) -> Unit)? = null
   ) {
     viewModelScope.launch {
-      val config = InAppUpdateManager.fetchRemoteVersionConfig(configUrl)
+      if (!isManualCheck && !updateStore.isDue()) {
+        refreshCachedUpdate(context)
+        return@launch
+      }
+      val config = UpdateChecks.check(context, force = isManualCheck, url = configUrl)
       if (config == null) {
         if (isManualCheck) {
           onResult?.invoke(false, "Could not reach update server. Check version.json URL.")
@@ -191,19 +274,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return@launch
       }
 
-      val updateAvailable = InAppUpdateManager.isUpdateAvailable(context, config)
-      if (updateAvailable || isManualCheck) {
-        _remoteUpdateConfig.value = config
+      val updateAvailable = config.latestVersionCode > UpdateChecks.installedVersion(context)
+      if (updateAvailable) {
+        if (isManualCheck || updateStore.visible(UpdateChecks.installedVersion(context)) != null) {
+          _remoteUpdateConfig.value = config
+        }
         onResult?.invoke(true, "Version v${config.latestVersionName} available")
+      } else {
+        _remoteUpdateConfig.value = null
+        if (isManualCheck) onResult?.invoke(false, "You already have the latest version")
       }
     }
   }
 
   fun dismissUpdateDialog() {
+    _remoteUpdateConfig.value?.let { updateStore.dismiss(it.latestVersionCode) }
     _remoteUpdateConfig.value = null
   }
 
   fun startAppUpdate(context: Context, config: AppVersionConfig) {
+    if (_isDownloadingUpdate.value) return
     viewModelScope.launch {
       _isDownloadingUpdate.value = true
       _downloadProgress.value = 0
@@ -213,6 +303,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
       _isDownloadingUpdate.value = false
       if (apkFile != null) {
         InAppUpdateManager.promptInstallApk(context, apkFile)
+      } else {
+        android.widget.Toast.makeText(context, "Update download failed. Check your connection and try again.", android.widget.Toast.LENGTH_LONG).show()
       }
     }
   }
@@ -871,18 +963,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         allKnownTxns.add(newTxn)
         newTxns++
 
-        // Auto-reconcile / dismiss draft from notification inbox if this device has one
-        val candUtr = extractUpiReference(tDto.referenceNumber, tDto.note, tDto.vendorName)
-        val draftToDismiss = _notificationDrafts.value.find { draft ->
-          val draftUtr = extractUpiReference(draft.upiReference, draft.rawText, draft.senderOrReceiver)
-          (!draftUtr.isNullOrBlank() && draftUtr.equals(candUtr, ignoreCase = true)) ||
-            (Math.abs(draft.amount - tDto.amount) < 0.01 &&
-              Math.abs(draft.timestamp - tDto.timestamp) < 15 * 60 * 1000L)
-        }
-        if (draftToDismiss != null) {
-          dismissNotificationDraft(draftToDismiss.id)
-          addSyncLog("Auto-reconciled draft payment (Ref: ${draftToDismiss.upiReference}) already recorded on another device")
-        }
+      }
+      // Reconcile even if this peer transaction was already present locally.
+      val candUtr = extractUpiReference(tDto.referenceNumber, tDto.note, tDto.vendorName)
+      val draftToDismiss = _notificationDrafts.value.find { draft ->
+        val draftUtr = extractUpiReference(draft.upiReference, draft.rawText, draft.senderOrReceiver)
+        draft.type == tDto.type && kotlin.math.abs(draft.amount - tDto.amount) < 0.01 &&
+          !draftUtr.isNullOrBlank() && draftUtr.equals(candUtr, ignoreCase = true)
+      }
+      if (draftToDismiss != null) {
+        dismissNotificationDraft(draftToDismiss.id)
+        addSyncLog("Auto-reconciled draft payment (Ref: ${draftToDismiss.upiReference}) already recorded on another device")
       }
     }
 

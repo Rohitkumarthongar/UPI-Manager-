@@ -112,7 +112,7 @@ fun ReportsScreen(
     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
     verticalArrangement = Arrangement.spacedBy(16.dp)
   ) {
-    // 1. Monthly Financial Executive Summary
+    // 1. Financial summary of all recorded transactions
     item {
       Card(
         shape = RoundedCornerShape(20.dp),
@@ -127,18 +127,18 @@ fun ReportsScreen(
           ) {
             Column {
               Text(
-                text = "Automated Monthly Report",
+                text = "Ledger Report",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onPrimaryContainer
               )
               Text(
-                text = "September 2026 Audit Summary",
+                text = "All recorded transactions",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
               )
             }
             StatusTag(
-              text = "Savings: $savingsRate%",
+              text = if (transactions.isEmpty()) "No activity" else "Savings: $savingsRate%",
               color = if (savingsRate >= 0) EmeraldDark else AccentRose
             )
           }
@@ -172,8 +172,8 @@ fun ReportsScreen(
           ) {
             OutlinedButton(
               onClick = {
-                val csv = ReportExporter.generateTransactionsCsv(transactions, "September_2026")
-                ReportExporter.shareReport(context, csv, "Monthly_Report_Sep2026", "csv", "text/csv")
+                val csv = ReportExporter.generateTransactionsCsv(transactions, "All transactions")
+                ReportExporter.shareReport(context, csv, "Ledger_Report", "csv", "text/csv")
               },
               shape = RoundedCornerShape(12.dp),
               modifier = Modifier.weight(1f).testTag("export_monthly_csv")
@@ -187,9 +187,9 @@ fun ReportsScreen(
               onClick = {
                 val printable = StringBuilder().apply {
                   append("==============================================\n")
-                  append("      MONTHLY FINANCIAL REPORT - OFFLINE LEDGER\n")
+                  append("      FINANCIAL REPORT - OFFLINE LEDGER\n")
                   append("==============================================\n")
-                  append("Period: September 2026\n")
+                  append("Period: All recorded transactions\n")
                   append("Generated: ${java.util.Date()}\n\n")
                   append(String.format(Locale.US, "Total Income   : ₹ %,.2f\n", totalIncome))
                   append(String.format(Locale.US, "Total Expense  : ₹ %,.2f\n", totalExpense))
@@ -201,10 +201,10 @@ fun ReportsScreen(
                     append(String.format(Locale.US, " - %-14s: ₹ %,.2f (%d%%)\n", cat, amt, pct))
                   }
                   append("==============================================\n")
-                  append("Certified Offline Record (AES-256 Keystore Protected)\n")
+                  append("Local ledger export\n")
                 }.toString()
 
-                ReportExporter.shareReport(context, printable, "Monthly_Audit_Sep2026", "txt", "text/plain")
+                ReportExporter.shareReport(context, printable, "Ledger_Report", "txt", "text/plain")
               },
               shape = RoundedCornerShape(12.dp),
               colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
@@ -212,7 +212,7 @@ fun ReportsScreen(
             ) {
               Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("Export PDF/Doc")
+              Text("Export Text")
             }
           }
         }

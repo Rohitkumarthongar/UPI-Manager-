@@ -17,6 +17,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
 import com.example.ui.dialogs.InAppUpdateDialog
 import androidx.compose.animation.Crossfade
@@ -70,7 +73,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.model.Client
-import com.example.data.model.NotificationDraft
 import com.example.ocr.ParsedReceipt
 import com.example.ui.dialogs.AddTransactionDialog
 import com.example.ui.dialogs.NotificationInboxDialog
@@ -87,26 +89,40 @@ import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AppViewModel
 import com.example.ui.viewmodel.NavigationTab
+import com.example.util.SmsPaymentReceiver
+import com.example.util.UpdateCheckScheduler
+import com.example.util.UpdateCheckWorker
 
 class MainActivity : ComponentActivity() {
+  private var notificationOpenToken by mutableStateOf(0)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    UpdateCheckScheduler.schedule(this)
+    if (intent?.getBooleanExtra(UpdateCheckWorker.EXTRA_OPEN_UPDATE, false) == true) notificationOpenToken++
     enableEdgeToEdge()
     setContent {
       val viewModel: AppViewModel = viewModel()
       val isDark by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
       MyApplicationTheme(darkTheme = isDark) {
-        MainAppContent(viewModel)
+        MainAppContent(viewModel, notificationOpenToken)
       }
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    if (intent.getBooleanExtra(UpdateCheckWorker.EXTRA_OPEN_UPDATE, false)) notificationOpenToken++
   }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainAppContent(viewModel: AppViewModel) {
+fun MainAppContent(viewModel: AppViewModel, openUpdateFromNotification: Int = 0) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
   val isDark by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
@@ -153,16 +169,35 @@ fun MainAppContent(viewModel: AppViewModel) {
   // Dialog Visibility States
   var showAddTxnDialog by remember { mutableStateOf(false) }
   var showNotificationInbox by remember { mutableStateOf(false) }
+  var pendingSmsPermissionScan by remember { mutableStateOf(false) }
   var showMultiDeviceSyncScreen by remember { mutableStateOf(false) }
   var pendingReceiptToEdit by remember { mutableStateOf<ParsedReceipt?>(null) }
 
   // Startup Runtime Permissions Request (Camera, SMS & Notifications) & Update Check
   val permissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestMultiplePermissions()
-  ) { _ -> }
+  ) { results ->
+    if (results[Manifest.permission.READ_SMS] == true) {
+      viewModel.scanBankSmsInbox(context) { added, message ->
+        if (added != null && added > 0) showNotificationInbox = true
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+      }
+    } else if (results.containsKey(Manifest.permission.READ_SMS)) {
+      Toast.makeText(context, "SMS inbox access denied. You can still enter payments manually.", Toast.LENGTH_LONG).show()
+    }
+    if (pendingSmsPermissionScan && results[Manifest.permission.READ_SMS] != true) {
+      Toast.makeText(context, "Allow SMS access to import payment alerts", Toast.LENGTH_SHORT).show()
+    }
+    pendingSmsPermissionScan = false
+  }
 
   LaunchedEffect(Unit) {
+    viewModel.refreshCachedUpdate(context)
     viewModel.checkForAppUpdate(context)
+    if (drafts.isNotEmpty()) showNotificationInbox = true
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+      viewModel.scanBankSmsInbox(context) { added, _ -> if (added != null && added > 0) showNotificationInbox = true }
+    }
 
     val permissionsToRequest = mutableListOf(
       Manifest.permission.CAMERA,
@@ -180,35 +215,38 @@ fun MainAppContent(viewModel: AppViewModel) {
     }
   }
 
+  LaunchedEffect(openUpdateFromNotification) {
+    if (openUpdateFromNotification > 0) viewModel.refreshCachedUpdate(context, fromNotification = true)
+  }
+
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        com.example.util.InAppUpdateManager.resumePendingInstall(context)
+        viewModel.refreshCachedUpdate(context)
+        viewModel.checkForAppUpdate(context)
+        viewModel.refreshSmsDrafts()
+        if (viewModel.notificationDrafts.value.isNotEmpty()) showNotificationInbox = true
+      }
+      if (event == Lifecycle.Event.ON_RESUME &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+        viewModel.scanBankSmsInbox(context) { added, _ -> if (added != null && added > 0) showNotificationInbox = true }
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
   // SMS Payment Broadcast Receiver
   DisposableEffect(context) {
     val smsReceiver = object : BroadcastReceiver() {
       override fun onReceive(context: Context?, intent: Intent?) {
-        if (intent?.action == "com.example.ACTION_PAYMENT_SMS_RECEIVED") {
-          val id = intent.getStringExtra("EXTRA_DRAFT_ID") ?: return
-          val sender = intent.getStringExtra("EXTRA_SENDER") ?: "SMS"
-          val amount = intent.getDoubleExtra("EXTRA_AMOUNT", 0.0)
-          val type = intent.getStringExtra("EXTRA_TYPE") ?: "INCOME"
-          val raw = intent.getStringExtra("EXTRA_RAW") ?: ""
-          val party = intent.getStringExtra("EXTRA_PARTY") ?: "Bank SMS"
-          val ref = intent.getStringExtra("EXTRA_REF")
-
-          val draft = NotificationDraft(
-            id = id,
-            senderApp = sender,
-            amount = amount,
-            type = type,
-            rawText = raw,
-            senderOrReceiver = party,
-            timestamp = System.currentTimeMillis(),
-            upiReference = ref
-          )
-          viewModel.addSmsPaymentDraft(draft)
-          Toast.makeText(context, "Payment SMS detected: ₹$amount", Toast.LENGTH_SHORT).show()
+        if (intent?.action == SmsPaymentReceiver.ACTION_PAYMENT_SMS_RECEIVED) {
+          if (viewModel.refreshSmsDrafts() > 0) showNotificationInbox = true
         }
       }
     }
-    val filter = IntentFilter("com.example.ACTION_PAYMENT_SMS_RECEIVED")
+    val filter = IntentFilter(SmsPaymentReceiver.ACTION_PAYMENT_SMS_RECEIVED)
     ContextCompat.registerReceiver(
       context,
       smsReceiver,
@@ -546,25 +584,22 @@ fun MainAppContent(viewModel: AppViewModel) {
             return@NotificationInboxDialog
           }
         }
-        viewModel.addTransaction(
-          amount = draft.amount,
-          type = draft.type,
-          category = "UPI Transfer",
-          accountId = active?.id,
-          clientId = null,
-          note = "${draft.senderApp}: ${draft.rawText}",
-          vendorName = draft.senderOrReceiver,
-          source = "NOTIFICATION"
-        )
-        viewModel.dismissNotificationDraft(draft.id)
-        Toast.makeText(context, "Posted into ledger!", Toast.LENGTH_SHORT).show()
+        viewModel.confirmSmsDraft(draft, active?.id) { _, message ->
+          Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
       },
       onDismissDraft = { draftId ->
         viewModel.dismissNotificationDraft(draftId)
       },
       onSyncSmsInbox = {
-        viewModel.scanBankSmsInbox(context)
-        Toast.makeText(context, "Scanning bank SMS inbox for payment alerts...", Toast.LENGTH_SHORT).show()
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+          viewModel.scanBankSmsInbox(context) { _, message ->
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+          }
+        } else {
+          pendingSmsPermissionScan = true
+          permissionLauncher.launch(arrayOf(Manifest.permission.READ_SMS))
+        }
       },
       onClose = { showNotificationInbox = false }
     )
@@ -595,19 +630,6 @@ fun MainAppContent(viewModel: AppViewModel) {
       onSyncNow = { url, code, cb -> viewModel.syncWithHost(url, code, cb) },
       onTestPing = { url, cb -> viewModel.testHostConnection(url, cb) },
       onToggleAutoSync = { viewModel.toggleAutoSync(it) },
-      onSimulateReceivedPayment = { amt, payer ->
-        val activeAcc = upiAccounts.firstOrNull { it.isActive } ?: upiAccounts.firstOrNull()
-        viewModel.addTransaction(
-          amount = amt,
-          type = "INCOME",
-          category = "UPI Transfer",
-          accountId = activeAcc?.id,
-          clientId = null,
-          note = "Customer payment via UPI",
-          vendorName = payer,
-          source = customDeviceName
-        )
-      },
       onBack = { showMultiDeviceSyncScreen = false }
     )
   }

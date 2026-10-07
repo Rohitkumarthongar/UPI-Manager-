@@ -227,7 +227,7 @@ fun HeroBalanceCard(
           )
         }
         StatusTag(
-          text = if (netSavings >= 0) "Surplus" else "Deficit",
+          text = if (netSavings > 0) "Surplus" else if (netSavings < 0) "Deficit" else "No activity",
           color = if (netSavings >= 0) EmeraldDark else AccentRose
         )
       }
@@ -327,7 +327,7 @@ fun QuickActionsRow(
     )
     QuickActionTile(
       title = "Pay Inbox",
-      subtitle = if (draftsCount > 0) "$draftsCount unposted" else "Verified",
+      subtitle = if (draftsCount > 0) "$draftsCount unposted" else "No drafts",
       icon = Icons.Default.NotificationsActive,
       color = if (draftsCount > 0) AccentAmber else EmeraldPrimary,
       badgeCount = draftsCount,
@@ -693,12 +693,12 @@ fun OfflineSecurityBadge() {
       Spacer(modifier = Modifier.width(12.dp))
       Column {
         Text(
-          text = "100% Offline & Keystore Encrypted",
+          text = "Local ledger",
           style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
           color = MaterialTheme.colorScheme.onSurface
         )
         Text(
-          text = "All transactions, balance sheets, and receipts stay strictly on your device.",
+          text = "Review and export your locally stored ledger records.",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant
         )

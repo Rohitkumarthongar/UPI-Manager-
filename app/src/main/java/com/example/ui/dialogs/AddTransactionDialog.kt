@@ -123,21 +123,25 @@ fun AddTransactionDialog(
   var vendor by remember { mutableStateOf(prefilledReceipt?.vendor ?: "") }
   var source by remember { mutableStateOf(if (prefilledReceipt != null) "OCR" else "MANUAL") }
   var referenceNumber by remember { mutableStateOf(prefilledReceipt?.invoiceNo.orEmpty()) }
+  var scanError by remember { mutableStateOf<String?>(prefilledReceipt?.extractionError) }
 
   // OCR runs asynchronously while this dialog remains composed. Keep the editable
   // fields synchronized when a newly parsed receipt is delivered.
   LaunchedEffect(prefilledReceipt) {
     prefilledReceipt?.let { receipt ->
-      amountText = receipt.amount?.let { String.format(java.util.Locale.US, "%.2f", it) }.orEmpty()
-      type = receipt.type
-      selectedCategory = receipt.suggestedCategory
-      vendor = receipt.vendor.orEmpty()
-      referenceNumber = receipt.invoiceNo.orEmpty()
-      note = listOfNotNull(
-        receipt.invoiceNo?.let { "Ref/UTR: $it" },
-        receipt.upiId?.let { "VPA: $it" }
-      ).joinToString(" • ").ifBlank { "Scanned Payment Receipt" }
-      source = "OCR"
+      scanError = receipt.extractionError
+      if (receipt.amount != null) {
+        amountText = String.format(java.util.Locale.US, "%.2f", receipt.amount)
+        type = receipt.type
+        selectedCategory = receipt.suggestedCategory
+        vendor = receipt.vendor.orEmpty()
+        referenceNumber = receipt.invoiceNo.orEmpty()
+        note = listOfNotNull(
+          receipt.invoiceNo?.let { "Ref/UTR: $it" },
+          receipt.upiId?.let { "VPA: $it" }
+        ).joinToString(" • ").ifBlank { "Scanned Payment Receipt" }
+        source = "OCR"
+      }
     }
   }
 
@@ -156,8 +160,11 @@ fun AddTransactionDialog(
           @Suppress("DEPRECATION")
           MediaStore.Images.Media.getBitmap(context.contentResolver, it)
         }
+        scanError = null
         onScanReceiptRequest?.invoke(bitmap)
-      } catch (_: Exception) {}
+      } catch (_: Exception) {
+        scanError = "Could not open this image. Choose another image or enter the details manually."
+      }
     }
   }
 
@@ -166,6 +173,7 @@ fun AddTransactionDialog(
     contract = ActivityResultContracts.TakePicturePreview()
   ) { bitmap: Bitmap? ->
     bitmap?.let {
+      scanError = null
       onScanReceiptRequest?.invoke(it)
     }
   }
@@ -318,6 +326,16 @@ fun AddTransactionDialog(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        scanError?.let { message ->
+          Text(
+            text = message,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.fillMaxWidth().testTag("ocr_extraction_error")
+          )
+          Spacer(modifier = Modifier.height(12.dp))
+        }
+
         // Type Toggle: Income vs Expense
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -352,7 +370,10 @@ fun AddTransactionDialog(
         // Amount Input Field
         OutlinedTextField(
           value = amountText,
-          onValueChange = { amountText = it },
+          onValueChange = {
+            amountText = it
+            if (prefilledReceipt?.amount == null) source = "MANUAL"
+          },
           label = { Text("Amount (₹)") },
           placeholder = { Text("0.00") },
           singleLine = true,

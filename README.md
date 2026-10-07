@@ -57,8 +57,36 @@ For publishing release builds to Google Play or distributing signed APKs/Bundles
 2. Update `keystore.properties` with your upload keystore path, store password, key alias, and key password.
 3. Build the release bundle:
    ```bash
-   ./gradlew bundleRelease
-   ```
+    ./gradlew bundleRelease
+    ```
+
+### Repo push → in-app update (Firebase Hosting)
+
+`.github/workflows/deploy.yml` builds a **signed release APK** on pushes to `main` or `master`, or a manual Actions run. It publishes `app-release.apk` and `version.json` together to the Hosting site `upi-manager-b2087.web.app`. The app checks `https://upi-manager-b2087.web.app/version.json`; the manifest's `latestVersionCode`, `latestVersionName` and `apkDownloadUrl` are generated from that same build. Hosting deployment replaces the site's deployed files with the contents of `public/` plus the staged APK/manifest; keep any other required Hosting assets in `public/`.
+
+Set these **GitHub Actions repository secrets** before running the deploy workflow:
+
+| Secret | Purpose |
+| --- | --- |
+| `CREDENTIAL_FILE_CONTENT` | Firebase service-account JSON (plain JSON or base64-encoded JSON), with permission to deploy Firebase Hosting and, if used, App Distribution. |
+| `RELEASE_KEYSTORE_BASE64` | Base64 of the **persistent release signing keystore** (for example `base64 -w 0 my-upload-key.jks` on Linux); retain the original keystore securely for future releases. |
+| `STORE_PASSWORD` | Keystore password. |
+| `KEY_ALIAS` | Alias of the release key inside that keystore. |
+| `KEY_PASSWORD` | Release key password. |
+
+For optional tester distribution of this **same signed release APK**, also set `FIREBASE_APP_ID` and `FIREBASE_TESTERS` (comma-separated tester email addresses). No debug-key APK is published as an update. The Firebase project used by the workflow must be `upi-manager-b2087`, matching the app's update URL and Firebase configuration. The service account needs the necessary Hosting permissions (and App Distribution permissions if enabled); the workflow authenticates using `GOOGLE_APPLICATION_CREDENTIALS`.
+
+### Seven-day checks on the phone
+
+Opening the app registers one persistent Android WorkManager job with a seven-day interval and a network constraint. It survives ordinary process shutdown/reboots; Android can defer it for battery/network restrictions, and force-stopping the app prevents background work until it is reopened. No desktop cron is needed.
+
+The app checks on first use and catches up on opening when the last successful check is at least seven days old. Background discoveries show an update notification if notification permission is granted; otherwise the cached update is offered when the app is opened. Choosing Later suppresses repeat dialogs for that same version. The existing Check for Updates button always requests fresh metadata, regardless of the seven-day interval or a prior dismissal. Downloads and installation still require the user's action; no silent install is performed.
+
+The workflow derives a versionCode from UTC seconds since 2020-01-01 (greater than the existing static Hosting code `2`, within Android's supported range through 2086). It rejects a build whose code is not newer than the currently served manifest, including a duplicate run in the same second. The versionName is `1.0.<versionCode>`. Both values can also be supplied locally via `-PreleaseVersionCode=... -PreleaseVersionName=...`; the code must be 3–2100000000. The workflow serializes deploys across branches and cancels superseded runs, but do not manually deploy an older `version.json` afterward. A failed or unreachable remote version check blocks deployment rather than risking a downgrade.
+
+Tag-triggered GitHub Releases (`.github/workflows/release.yml`) also use the same release signing secrets and publish a signed release APK. They do not update Hosting; run the deploy workflow to change the in-app update manifest.
+
+**Signing compatibility:** an installed copy can update in place only when the new APK has the same application ID and signing certificate. An app previously installed with a debug key or another release key cannot install this release over it; use the same original signing key for existing users, or uninstall the old app first (which may remove local data). To check a run, inspect the Actions deploy job, then fetch the live `version.json` and `app-release.apk` URLs above and compare the manifest versionCode/versionName with the built APK using `apkanalyzer manifest version-code app-release.apk` and `apkanalyzer manifest version-name app-release.apk` (or `aapt dump badging`).
 
 ---
 

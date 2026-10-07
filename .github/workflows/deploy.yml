@@ -2,65 +2,141 @@ name: Build and Deploy to Firebase
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
+
+# A single Hosting target is shared by both branches and manual runs.
+concurrency:
+  group: firebase-hosting-android-update
+  cancel-in-progress: true
 
 jobs:
   build_and_distribute:
     runs-on: ubuntu-latest
-
+    env:
+      FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+      FIREBASE_TESTERS: ${{ secrets.FIREBASE_TESTERS }}
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-        cache: gradle
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+      - name: Check required publishing secrets
+        env:
+          CREDENTIAL_FILE_CONTENT: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          for name in CREDENTIAL_FILE_CONTENT RELEASE_KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required secret $name is missing"
+              exit 1
+            fi
+          done
 
-    - name: Create default .env file for CI
-      run: |
-        cp .env.example .env
+      - name: Prepare signing and service account
+        env:
+          CREDENTIAL_FILE_CONTENT: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, pathlib
 
-    - name: Build Android Debug APK
-      run: ./gradlew assembleDebug --stacktrace
+          def decode(value):
+              return base64.b64decode(value, validate=True)
 
-    - name: Setup Firebase Service Account Credentials
-      run: |
-        python3 -c '
-        import os, base64, json
-        content = os.environ.get("SECRET_CONTENT", "").strip()
-        try:
-            decoded = base64.b64decode(content).decode("utf-8")
-            json.loads(decoded)
-            data = decoded
-        except Exception:
-            data = content
-        with open("service_account.json", "w") as f:
-            f.write(data)
-        '
-        echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/service_account.json" >> $GITHUB_ENV
-      env:
-        SECRET_CONTENT: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
+          try:
+              keystore = decode(os.environ['RELEASE_KEYSTORE_BASE64'])
+              if not keystore:
+                  raise ValueError('empty keystore')
+              pathlib.Path('release-upload.jks').write_bytes(keystore)
+              value = os.environ['CREDENTIAL_FILE_CONTENT'].strip()
+              try:
+                  account = json.loads(value)
+              except json.JSONDecodeError:
+                  account = json.loads(decode(value))
+              if account.get('type') != 'service_account':
+                  raise ValueError('credential must be a service account JSON')
+              pathlib.Path('service_account.json').write_text(json.dumps(account))
+          except (ValueError, KeyError, UnicodeDecodeError) as exc:
+              raise SystemExit(f'Invalid signing keystore or service-account credential: {exc}')
+          PY
+          chmod 600 release-upload.jks service_account.json
+          echo "KEYSTORE_PATH=$PWD/release-upload.jks" >> "$GITHUB_ENV"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$PWD/service_account.json" >> "$GITHUB_ENV"
+          # Pass signing values as environment variables, never as command-line arguments.
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
+      - name: Compute build version
+        run: |
+          # Seconds since 2020-01-01: higher than the old static code 2 and within Android's limit until 2086.
+          code=$(( $(date -u +%s) - 1577836800 ))
+          if (( code < 3 || code > 2100000000 )); then
+            echo '::error::Generated versionCode is outside Android range'
+            exit 1
+          fi
+          echo "VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.0.$code" >> "$GITHUB_ENV"
 
-    - name: Install Firebase CLI
-      run: npm install -g firebase-tools
+      - name: Create default .env file for CI
+        run: cp .env.example .env
 
-    - name: Deploy to Firebase App Distribution
-      run: |
-        firebase appdistribution:distribute app/build/outputs/apk/debug/app-debug.apk \
-          --app "${{ secrets.FIREBASE_APP_ID }}" \
-          --testers "rohitkumarsoni713@gmail.com"
-      env:
-        FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service_account.json
+      - name: Build signed release APK
+        run: ./gradlew assembleRelease -PreleaseVersionCode="$VERSION_CODE" -PreleaseVersionName="$VERSION_NAME" --stacktrace
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Stage matching APK and update metadata
+        run: |
+          test -s app/build/outputs/apk/release/app-release.apk || { echo '::error::Signed release APK missing'; exit 1; }
+          cp app/build/outputs/apk/release/app-release.apk public/app-release.apk
+          python3 - <<'PY'
+          import json, os, pathlib
+          manifest = {
+              'latestVersionCode': int(os.environ['VERSION_CODE']),
+              'latestVersionName': os.environ['VERSION_NAME'],
+              'apkDownloadUrl': 'https://upi-manager-b2087.web.app/app-release.apk?v=' + os.environ['VERSION_CODE'],
+              'isMandatory': False,
+              'releaseNotes': 'Latest signed release build.'
+          }
+          pathlib.Path('public/version.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+
+      - name: Reject older or duplicate remote versions
+        run: |
+          remote=$(curl --fail --silent --show-error --location --max-time 20 -H 'Cache-Control: no-cache' \
+            'https://upi-manager-b2087.web.app/version.json' | python3 -c 'import json,sys; print(int(json.load(sys.stdin)["latestVersionCode"]))') || {
+              echo '::error::Cannot check current Hosting version; refusing to publish blindly'
+              exit 1
+            }
+          if (( VERSION_CODE <= remote )); then
+            echo "::error::Build version $VERSION_CODE is not newer than Hosting version $remote"
+            exit 1
+          fi
+
+      - name: Deploy APK and metadata together to Firebase Hosting
+        run: firebase deploy --only hosting --project upi-manager-b2087 --non-interactive
+
+      - name: Distribute signed release to testers
+        if: ${{ env.FIREBASE_APP_ID != '' && env.FIREBASE_TESTERS != '' }}
+        run: firebase appdistribution:distribute app/build/outputs/apk/release/app-release.apk --app "$FIREBASE_APP_ID" --testers "$FIREBASE_TESTERS" --project upi-manager-b2087

@@ -8,8 +8,10 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CancellationException
 import java.util.regex.Pattern
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 data class ParsedReceipt(
   val amount: Double?,
@@ -20,7 +22,8 @@ data class ParsedReceipt(
   val upiId: String? = null, // VPA e.g. store@okhdfcbank
   val suggestedCategory: String,
   val rawText: String,
-  val confidenceScore: Float = 0.9f
+  val confidenceScore: Float = 0.9f,
+  val extractionError: String? = null
 )
 
 object ReceiptOcrHelper {
@@ -37,36 +40,40 @@ object ReceiptOcrHelper {
         bitmap
       }
       val image = InputImage.fromBitmap(softwareBitmap, 0)
-      val visionText = suspendCancellableCoroutine { continuation ->
+      val visionText = suspendCancellableCoroutine<String> { continuation ->
         recognizer.process(image)
           .addOnSuccessListener { text ->
             if (continuation.isActive) continuation.resume(text.text)
           }
-          .addOnFailureListener {
-            if (continuation.isActive) continuation.resume("")
+          .addOnFailureListener { error ->
+            if (continuation.isActive) continuation.resumeWithException(error)
           }
       }
       extractReceiptDetails(visionText)
+    } catch (e: CancellationException) {
+      throw e
     } catch (e: Exception) {
-      extractReceiptDetails("")
+      extractReceiptDetails("").copy(extractionError = "Could not scan this image. Try a clearer image or enter the details manually.")
     }
   }
 
   suspend fun parseReceiptUri(context: Context, uri: Uri): ParsedReceipt {
     return try {
       val image = InputImage.fromFilePath(context, uri)
-      val visionText = suspendCancellableCoroutine { continuation ->
+      val visionText = suspendCancellableCoroutine<String> { continuation ->
         recognizer.process(image)
           .addOnSuccessListener { text ->
             if (continuation.isActive) continuation.resume(text.text)
           }
-          .addOnFailureListener {
-            if (continuation.isActive) continuation.resume("")
+          .addOnFailureListener { error ->
+            if (continuation.isActive) continuation.resumeWithException(error)
           }
       }
       extractReceiptDetails(visionText)
+    } catch (e: CancellationException) {
+      throw e
     } catch (e: Exception) {
-      extractReceiptDetails("")
+      extractReceiptDetails("").copy(extractionError = "Could not open or scan this image. Try another image or enter the details manually.")
     }
   }
 
@@ -81,7 +88,8 @@ object ReceiptOcrHelper {
         upiId = null,
         suggestedCategory = "Other",
         rawText = "",
-        confidenceScore = 0.0f
+        confidenceScore = 0.0f,
+        extractionError = "No readable text found. Try a clearer image or enter the details manually."
       )
     }
 
@@ -89,13 +97,8 @@ object ReceiptOcrHelper {
     val lowerText = rawText.lowercase()
 
     // 1. Transaction Type (Income vs Expense)
-    val isIncome = lowerText.contains("received from") ||
-        lowerText.contains("received ₹") ||
-        lowerText.contains("received rs") ||
-        lowerText.contains("credited") ||
-        lowerText.contains("credit") ||
-        lowerText.contains("payment received") ||
-        lowerText.contains("money received")
+    val isIncome = Regex("\\b(received from|payment received|money received|amount received|credited to|credited into)\\b|\\breceived\\s+(?:₹|rs\\.?|inr)\\s*[0-9]", RegexOption.IGNORE_CASE)
+      .containsMatchIn(rawText) || Regex("\\b(?:₹|rs\\.?|inr)\\s*[0-9,.]+\\s+(?:received|credited)\\b", RegexOption.IGNORE_CASE).containsMatchIn(rawText)
     val txnType = if (isIncome) "INCOME" else "EXPENSE"
 
     // 2. Extract UPI VPA / ID (e.g. paytmqr1rcvn1deli@paytm, user@okhdfcbank)
@@ -174,40 +177,43 @@ object ReceiptOcrHelper {
       }
     }
 
-    // 4. Extract Amount (e.g. ₹22,000 or ₹22,000.00 or Rs. 22000)
-    var amount: Double? = null
-    val amountPattern = Pattern.compile(
-      "(?:total|grand\\s+total|amount|paid|received|due|rs\\.?|₹|inr)\\s*[:=-]?\\s*₹?\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)",
-      Pattern.CASE_INSENSITIVE
+    // 4. Pick the payable/paid total, not the largest number on the page.
+    // A payment screenshot commonly also contains a balance, a masked account
+    // number, and the same amount again beside "Debited from".
+    val number = "((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,3}(?:,[0-9]{2})+,[0-9]{3}|[0-9]+)(?:\\.[0-9]{1,2})?)(?![0-9,.])"
+    val money = "(?:₹|rs\\.?|inr)\\s*$number"
+    val labeledAmount = Regex(
+      "\\b(grand\\s+total|total\\s+(?:paid|amount)|amount\\s+(?:paid|received|sent)|payment\\s+(?:of|amount)|paid|received|total|amount)\\b\\s*[:=-]?\\s*(?:₹|rs\\.?|inr)?\\s*$number",
+      RegexOption.IGNORE_CASE
     )
-
-    for (line in lines) {
-      val matcher = amountPattern.matcher(line)
-      if (matcher.find()) {
-        val numStr = matcher.group(1)?.replace(",", "")
-        val parsed = numStr?.toDoubleOrNull()
-        if (parsed != null && parsed > 0.0 && (amount == null || parsed > amount)) {
-          amount = parsed
+    val currencyAmount = Regex(money, RegexOption.IGNORE_CASE)
+    val excludedAmountLine = Regex("\\b(balance|available|remaining|debited from|credited to|account|a/c|cashback|discount|subtotal|sub-total|tax|gst|fee|charge|saving|limit|due|refund)\\b", RegexOption.IGNORE_CASE)
+    val candidates = mutableListOf<Pair<Int, Double>>()
+    for ((index, line) in lines.withIndex()) {
+      if (excludedAmountLine.containsMatchIn(line)) continue
+      val label = labeledAmount.find(line)
+      val currency = currencyAmount.find(line)
+      // OCR often places the total label and the digits in separate blocks.
+      val nextLineAmount = if (Regex("^(?:grand\\s+total|total(?:\\s+(?:paid|amount))?|amount(?:\\s+(?:paid|received|sent))?)\\s*[:=-]?\\s*$", RegexOption.IGNORE_CASE).matches(line)) {
+        lines.getOrNull(index + 1)?.let { next ->
+          Regex("^(?:₹|rs\\.?|inr)?\\s*$number\\s*$", RegexOption.IGNORE_CASE).matchEntire(next)?.groupValues?.get(1)
         }
+      } else null
+      val number = label?.groupValues?.get(2) ?: currency?.groupValues?.get(1) ?: nextLineAmount
+      val value = number?.replace(",", "")?.toDoubleOrNull()
+      if (value == null || !value.isFinite() || value <= 0.0) continue
+      val text = line.lowercase()
+      val priority = when {
+        Regex("\\b(grand\\s+total|total\\s+paid|total\\s+amount|amount\\s+paid|amount\\s+received|amount\\s+sent)\\b").containsMatchIn(text) -> 5
+        Regex("\\b(total|payment\\s+(?:of|amount)|paid|received)\\b").containsMatchIn(text) -> 4
+        Regex("\\bamount\\b").containsMatchIn(text) -> 3
+        currency != null && index < 7 -> 2
+        currency != null -> 1
+        else -> 0
       }
+      if (priority > 0) candidates += priority to value
     }
-
-    if (amount == null) {
-      // Some OCR engines emit the rupee sign as a standalone line or replace it
-      // with Rs/INR; accept those forms as a final fallback.
-      val standaloneAmountPattern = Pattern.compile("(?:₹|rs\\.?|inr)\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)", Pattern.CASE_INSENSITIVE)
-      for (line in lines) {
-        val m = standaloneAmountPattern.matcher(line)
-        if (m.find()) {
-          val numStr = m.group(1)?.replace(",", "")
-          val parsed = numStr?.toDoubleOrNull()
-          if (parsed != null && parsed > 0.0) {
-            amount = parsed
-            break
-          }
-        }
-      }
-    }
+    val amount = candidates.maxByOrNull { it.first }?.second
 
     // 5. Extract Payee / Payer / Vendor Name
     var vendorName: String? = null
@@ -318,7 +324,8 @@ object ReceiptOcrHelper {
       upiId = extractedUpiId,
       suggestedCategory = category,
       rawText = rawText,
-      confidenceScore = score
+      confidenceScore = score,
+      extractionError = if (amount == null) "No payment amount found. Check the image or enter the amount manually." else null
     )
   }
 }
