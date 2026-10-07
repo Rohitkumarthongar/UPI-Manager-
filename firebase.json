@@ -5,16 +5,13 @@
       {
         "source": "/version.json",
         "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }]
-      },
-      {
-        "source": "/app-release.apk",
-        "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }]
       }
     ],
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "**/*.apk"
     ]
   }
 }

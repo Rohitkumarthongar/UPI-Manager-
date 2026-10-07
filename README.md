@@ -60,9 +60,13 @@ For publishing release builds to Google Play or distributing signed APKs/Bundles
     ./gradlew bundleRelease
     ```
 
-### Repo push → in-app update (Firebase Hosting)
+### Repo push → in-app update (GitHub Releases + Firebase Spark)
 
-`.github/workflows/deploy.yml` builds a **signed release APK** on pushes to `main` or `master`, or a manual Actions run. It publishes `app-release.apk` and `version.json` together to the Hosting site `upi-manager-b2087.web.app`. The app checks `https://upi-manager-b2087.web.app/version.json`; the manifest's `latestVersionCode`, `latestVersionName` and `apkDownloadUrl` are generated from that same build. Hosting deployment replaces the site's deployed files with the contents of `public/` plus the staged APK/manifest; keep any other required Hosting assets in `public/`.
+`.github/workflows/deploy.yml` builds a **signed release APK** on pushes to `main` or `master`, or a manual Actions run. APKs are published in the public source repository `Rohitkumarthongar/UPI-Manager-`, under version-specific tags `build-<versionCode>` targeting the exact source commit used for the build. Only update metadata and static assets are deployed to Firebase Hosting, so the project can remain on Spark: Spark does not allow hosting APK files.
+
+The app still checks `https://upi-manager-b2087.web.app/version.json`. That manifest points to `https://github.com/Rohitkumarthongar/UPI-Manager-/releases/download/build-<versionCode>/app-release.apk`. The workflow verifies an anonymous HTTPS download against the signed build's size and SHA-256 **before** publishing the metadata. Failed release/download verification leaves the previous Firebase manifest unchanged. No GitHub token is embedded in the app.
+
+The workflow uses the built-in `GITHUB_TOKEN` with job-level `contents: write`; no separate release repository or personal publishing token is required. Keep the repository public for anonymous APK downloads. Never commit signing files or Firebase keys, including in Git history. Hosting deployment replaces deployed files with `public/`; keep required static assets there, but never put an APK there. `firebase.json` excludes APKs and the workflow rejects executable artifacts in that directory.
 
 Set these **GitHub Actions repository secrets** under your repository's **Settings > Secrets and variables > Actions** before running the deploy workflow. The workflow reports all missing required secret names and stops before building or publishing; it never prints their values.
 
@@ -95,7 +99,7 @@ The app checks on first use and catches up on opening when the last successful c
 
 The workflow derives a versionCode from UTC seconds since 2020-01-01 (greater than the existing static Hosting code `2`, within Android's supported range through 2086). It rejects a build whose code is not newer than the currently served manifest, including a duplicate run in the same second. The versionName is `1.0.<versionCode>`. Both values can also be supplied locally via `-PreleaseVersionCode=... -PreleaseVersionName=...`; the code must be 3–2100000000. The workflow serializes deploys across branches and cancels superseded runs, but do not manually deploy an older `version.json` afterward. A failed or unreachable remote version check blocks deployment rather than risking a downgrade.
 
-Tag-triggered GitHub Releases (`.github/workflows/release.yml`) also use the same release signing secrets and publish a signed release APK. They do not update Hosting; run the deploy workflow to change the in-app update manifest.
+Tag-triggered GitHub Releases (`.github/workflows/release.yml`) are separate manually tagged releases; they do not update Hosting. Use the deploy workflow for coordinated APK publication and the in-app update manifest.
 
 **Signing compatibility:** an installed copy can update in place only when the new APK has the same application ID and signing certificate. An app previously installed with a debug key or another release key cannot install this release over it; use the same original signing key for existing users, or uninstall the old app first (which may remove local data). To check a run, inspect the Actions deploy job, then fetch the live `version.json` and `app-release.apk` URLs above and compare the manifest versionCode/versionName with the built APK using `apkanalyzer manifest version-code app-release.apk` and `apkanalyzer manifest version-name app-release.apk` (or `aapt dump badging`).
 

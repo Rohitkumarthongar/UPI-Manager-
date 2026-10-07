@@ -16,6 +16,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.ZipFile
 
 data class AppVersionConfig(
   val latestVersionCode: Long,
@@ -132,74 +133,88 @@ object InAppUpdateManager {
     onProgress: (Int) -> Unit
   ): File? {
     return withContext(Dispatchers.IO) {
-      try {
-        var currentUrl = apkUrl
-        var redirectCount = 0
-        var connection: HttpURLConnection? = null
+      val apkFile = File(context.cacheDir, "apks/update.apk")
+      downloadApkToFile(apkUrl, apkFile, { url -> url.openConnection() as HttpURLConnection }) { progress ->
+        withContext(Dispatchers.Main) { onProgress(progress) }
+      }
+    }
+  }
 
-        while (redirectCount < 5) {
-          val url = URL(currentUrl)
-          connection = url.openConnection() as HttpURLConnection
-          connection.instanceFollowRedirects = true
+  /** Connection factory keeps the network behavior testable without external release servers. */
+  internal suspend fun downloadApkToFile(
+    apkUrl: String,
+    apkFile: File,
+    openConnection: (URL) -> HttpURLConnection,
+    onProgress: suspend (Int) -> Unit = {}
+  ): File? {
+    // A failed attempt must not leave a previously downloaded APK available for installation.
+    if (apkFile.exists() && !apkFile.delete()) return null
+    var completed = false
+    try {
+      var url = URL(apkUrl)
+      var redirects = 0
+      while (true) {
+        if (url.protocol != "https" || url.host.isNullOrBlank()) return null
+        val connection = openConnection(url)
+        try {
+          connection.instanceFollowRedirects = false
           connection.requestMethod = "GET"
           connection.connectTimeout = 10000
           connection.readTimeout = 20000
-
           val status = connection.responseCode
-          if (status == HttpURLConnection.HTTP_MOVED_TEMP ||
-            status == HttpURLConnection.HTTP_MOVED_PERM ||
-            status == 307 || status == 308
-          ) {
-            val newUrl = connection.getHeaderField("Location")
-            if (newUrl.isNullOrBlank()) break
-            currentUrl = newUrl
-            redirectCount++
+          if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+            if (redirects >= 5) return null
+            val location = connection.getHeaderField("Location")?.takeIf { it.isNotBlank() } ?: return null
+            url = URL(url, location)
+            redirects++
             continue
           }
-          break
-        }
-
-        if (connection == null || connection.responseCode != HttpURLConnection.HTTP_OK) {
-          Log.e(TAG, "Failed to connect for download: ${connection?.responseCode}")
-          return@withContext null
-        }
-
-        val fileLength = connection.contentLength
-        val apkDir = File(context.cacheDir, "apks")
-        if (!apkDir.exists()) apkDir.mkdirs()
-
-        val apkFile = File(apkDir, "update.apk")
-        if (apkFile.exists()) apkFile.delete()
-
-        connection.inputStream.use { input ->
-          FileOutputStream(apkFile).use { output ->
-            val data = ByteArray(4096)
-            var total: Long = 0
-            var count: Int
-            while (input.read(data).also { count = it } != -1) {
-              total += count
-              if (fileLength > 0) {
-                val progress = ((total * 100) / fileLength).toInt()
-                withContext(Dispatchers.Main) {
-                  onProgress(progress)
-                }
-              }
-              output.write(data, 0, count)
-            }
-            output.flush()
+          if (status != HttpURLConnection.HTTP_OK) {
+            Log.e(TAG, "Failed to connect for download: $status")
+            return null
           }
+
+          val expectedLength = connection.contentLengthLong
+          val parent = apkFile.absoluteFile.parentFile ?: return null
+          if (!parent.exists() && !parent.mkdirs()) return null
+          connection.inputStream.use { input ->
+            FileOutputStream(apkFile).use { output ->
+              val data = ByteArray(4096)
+              var total = 0L
+              while (true) {
+                val count = input.read(data)
+                if (count == -1) break
+                output.write(data, 0, count)
+                total += count
+                if (expectedLength > 0) onProgress(((total * 100) / expectedLength).coerceAtMost(100).toInt())
+              }
+            }
+          }
+          if (apkFile.length() == 0L || (expectedLength >= 0 && apkFile.length() != expectedLength) ||
+            !isApkArchive(apkFile)
+          ) return null
+          onProgress(100)
+          completed = true
+          return apkFile
+        } finally {
+          connection.disconnect()
         }
-        if (apkFile.length() == 0L || (fileLength > 0 && apkFile.length() != fileLength.toLong())) {
-          apkFile.delete()
-          return@withContext null
-        }
-        withContext(Dispatchers.Main) { onProgress(100) }
-        apkFile
-      } catch (e: Exception) {
-        Log.e(TAG, "Error downloading APK", e)
-        null
       }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Log.e(TAG, "Error downloading APK", e)
+      return null
+    } finally {
+      // Only leave a completed, validated archive behind.
+      if (!completed) apkFile.delete()
     }
+  }
+
+  private fun isApkArchive(file: File): Boolean = try {
+    ZipFile(file).use { archive -> archive.getEntry("AndroidManifest.xml") != null }
+  } catch (_: Exception) {
+    false
   }
 
   /**
