@@ -1,7 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
-import android.graphics.Bitmap
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.CryptoManager
@@ -16,6 +16,7 @@ import com.example.data.model.UpiAccount
 import com.example.data.repository.AppRepository
 import com.example.ocr.ParsedReceipt
 import com.example.ocr.ReceiptOcrHelper
+import com.example.payments.PaymentInbox
 import com.example.sync.ConnectedClientInfo
 import com.example.sync.LocalSyncClient
 import com.example.sync.LocalSyncServer
@@ -46,6 +47,7 @@ enum class NavigationTab {
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
   private val repository: AppRepository
+  private val draftDao = AppDatabase.getInstance(application).paymentDraftDao()
 
   init {
     val db = AppDatabase.getInstance(application)
@@ -126,10 +128,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   private val _parsedReceipt = MutableStateFlow<ParsedReceipt?>(null)
   val parsedReceipt: StateFlow<ParsedReceipt?> = _parsedReceipt.asStateFlow()
 
-  fun processReceiptImage(bitmap: Bitmap, onDone: (ParsedReceipt) -> Unit) {
+  /** OCR of a receipt or payment screenshot photo; [onDone] gets null when no text could be read. */
+  fun processReceiptImage(uri: Uri, onDone: (ParsedReceipt?) -> Unit) {
     viewModelScope.launch {
       _isOcrProcessing.value = true
-      val parsed = ReceiptOcrHelper.parseReceiptImage(bitmap)
+      val parsed = ReceiptOcrHelper.parseReceiptImage(getApplication(), uri)
       _parsedReceipt.value = parsed
       _isOcrProcessing.value = false
       onDone(parsed)
@@ -140,39 +143,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     _parsedReceipt.value = null
   }
 
-  // --- Notification Draft Inbox ---
-  private val _notificationDrafts = MutableStateFlow<List<NotificationDraft>>(
-    listOf(
-      NotificationDraft(
-        id = "draft_1",
-        senderApp = "PhonePe",
-        amount = 1850.0,
-        type = "INCOME",
-        rawText = "Received ₹1,850.00 from Rajesh Verma via PhonePe UPI",
-        senderOrReceiver = "Rajesh Verma",
-        timestamp = System.currentTimeMillis() - 3600000L * 2,
-        upiReference = "UPI/4289019283"
-      ),
-      NotificationDraft(
-        id = "draft_2",
-        senderApp = "Google Pay",
-        amount = 450.0,
-        type = "EXPENSE",
-        rawText = "Paid ₹450.00 to Chai Point Bangalore",
-        senderOrReceiver = "Chai Point",
-        timestamp = System.currentTimeMillis() - 3600000L * 5,
-        upiReference = "UPI/4289019912"
-      )
-    )
-  )
-  val notificationDrafts: StateFlow<List<NotificationDraft>> = _notificationDrafts.asStateFlow()
+  // --- Pay Inbox: drafts read from bank SMS and UPI app notifications ---
+  val notificationDrafts: StateFlow<List<NotificationDraft>> = draftDao.getPendingDrafts()
+    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
   fun dismissNotificationDraft(draftId: String) {
-    _notificationDrafts.value = _notificationDrafts.value.filterNot { it.id == draftId }
+    viewModelScope.launch { draftDao.setStatus(draftId, "DISMISSED") }
   }
 
-  fun addTestNotificationDraft(draft: NotificationDraft) {
-    _notificationDrafts.value = listOf(draft) + _notificationDrafts.value
+  fun markDraftPosted(draftId: String) {
+    viewModelScope.launch { draftDao.setStatus(draftId, "POSTED") }
+  }
+
+  /** Picks up payment SMS that arrived while the app wasn't listening. */
+  fun scanSmsInbox(onDone: (Int) -> Unit = {}) {
+    viewModelScope.launch { onDone(PaymentInbox.scanSmsInbox(getApplication())) }
   }
 
   // --- Task Actions ---
@@ -227,7 +212,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     note: String,
     vendorName: String?,
     source: String = "MANUAL",
-    receiptPath: String? = null
+    receiptPath: String? = null,
+    referenceNumber: String? = null
   ) {
     viewModelScope.launch {
       // Secure encryption for sensitive financial notes
@@ -245,6 +231,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         source = source,
         status = "CONFIRMED",
         vendorName = vendorName,
+        referenceNumber = referenceNumber,
         timestamp = System.currentTimeMillis()
       )
       repository.insertTransaction(txn)
@@ -829,7 +816,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         // Auto-reconcile / dismiss draft from notification inbox if this device has one
         val candUtr = extractUpiReference(tDto.referenceNumber, tDto.note, tDto.vendorName)
-        val draftToDismiss = _notificationDrafts.value.find { draft ->
+        val draftToDismiss = notificationDrafts.value.find { draft ->
           val draftUtr = extractUpiReference(draft.upiReference, draft.rawText, draft.senderOrReceiver)
           (!draftUtr.isNullOrBlank() && draftUtr.equals(candUtr, ignoreCase = true)) ||
             (Math.abs(draft.amount - tDto.amount) < 0.01 &&

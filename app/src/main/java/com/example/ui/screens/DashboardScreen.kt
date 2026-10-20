@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -89,6 +90,7 @@ fun DashboardScreen(
   onTriggerSync: () -> Unit = {},
   onOpenSyncScreen: () -> Unit = {},
   onOpenReceiveUpi: () -> Unit,
+  onOpenScanPay: () -> Unit = {},
   onOpenOcrScanner: () -> Unit,
   onOpenAddTransaction: () -> Unit,
   onOpenNotificationInbox: () -> Unit,
@@ -151,6 +153,7 @@ fun DashboardScreen(
       QuickActionsRow(
         draftsCount = notificationDrafts.size,
         onOpenReceiveUpi = onOpenReceiveUpi,
+        onOpenScanPay = onOpenScanPay,
         onOpenOcrScanner = onOpenOcrScanner,
         onOpenNotificationInbox = onOpenNotificationInbox,
         onOpenAddTxn = onOpenAddTransaction
@@ -309,17 +312,26 @@ fun HeroBalanceCard(
 fun QuickActionsRow(
   draftsCount: Int,
   onOpenReceiveUpi: () -> Unit,
+  onOpenScanPay: () -> Unit = {},
   onOpenOcrScanner: () -> Unit,
   onOpenNotificationInbox: () -> Unit,
   onOpenAddTxn: () -> Unit
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.spacedBy(10.dp)
+    horizontalArrangement = Arrangement.spacedBy(8.dp)
   ) {
     QuickActionTile(
-      title = "Scan OCR",
-      subtitle = "Receipt bill",
+      title = "Scan & Pay",
+      subtitle = "UPI QR",
+      icon = Icons.Default.CenterFocusStrong,
+      color = EmeraldPrimary,
+      modifier = Modifier.weight(1f),
+      onClick = onOpenScanPay
+    )
+    QuickActionTile(
+      title = "Scan",
+      subtitle = "Bill / proof",
       icon = Icons.Default.DocumentScanner,
       color = AccentIndigo,
       modifier = Modifier.weight(1f),
@@ -335,8 +347,8 @@ fun QuickActionsRow(
       onClick = onOpenNotificationInbox
     )
     QuickActionTile(
-      title = "UPI QR",
-      subtitle = "Multi-account",
+      title = "Receive",
+      subtitle = "My QR",
       icon = Icons.Default.QrCodeScanner,
       color = AccentCyan,
       modifier = Modifier.weight(1f),

@@ -1,6 +1,9 @@
 package com.example.ocr
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
+import com.example.payments.PaymentMessageParser
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -15,8 +18,16 @@ data class ParsedReceipt(
   val invoiceNo: String?,
   val suggestedCategory: String,
   val rawText: String,
-  val confidenceScore: Float = 0.9f
-)
+  val confidenceScore: Float = 0.9f,
+  /** "INCOME"/"EXPENSE" when the image is a UPI payment screenshot, null for a shop receipt. */
+  val type: String? = null,
+  val referenceNumber: String? = null,
+  val fromParty: String? = null,
+  val toParty: String? = null,
+  val vpas: List<String> = emptyList()
+) {
+  val isUpiScreenshot: Boolean get() = type != null
+}
 
 object ReceiptOcrHelper {
 
@@ -24,37 +35,51 @@ object ReceiptOcrHelper {
     TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
   }
 
-  suspend fun parseReceiptImage(bitmap: Bitmap): ParsedReceipt {
-    return try {
-      val image = InputImage.fromBitmap(bitmap, 0)
-      val visionText = suspendCancellableCoroutine { continuation ->
-        recognizer.process(image)
-          .addOnSuccessListener { text ->
-            if (continuation.isActive) continuation.resume(text.text)
-          }
-          .addOnFailureListener {
-            if (continuation.isActive) continuation.resume("")
-          }
-      }
-      extractReceiptDetails(visionText)
-    } catch (e: Exception) {
-      extractReceiptDetails("")
-    }
+  /** Reads a photo (camera or gallery) at full resolution; EXIF rotation is applied. Null when no text is found. */
+  suspend fun parseReceiptImage(context: Context, uri: Uri): ParsedReceipt? =
+    runCatching { recognize(InputImage.fromFilePath(context, uri)) }.getOrNull()?.let(::extractOrNull)
+
+  suspend fun parseReceiptImage(bitmap: Bitmap): ParsedReceipt? =
+    runCatching { recognize(InputImage.fromBitmap(bitmap, 0)) }.getOrNull()?.let(::extractOrNull)
+
+  private suspend fun recognize(image: InputImage): String = suspendCancellableCoroutine { continuation ->
+    recognizer.process(image)
+      .addOnSuccessListener { text -> if (continuation.isActive) continuation.resume(text.text) }
+      .addOnFailureListener { if (continuation.isActive) continuation.resume("") }
   }
 
-  fun extractReceiptDetails(rawText: String): ParsedReceipt {
-    if (rawText.isBlank()) {
-      return ParsedReceipt(
-        amount = 1450.0,
-        vendor = "Metro Retail Store",
-        dateString = "15-Sep-2026",
-        invoiceNo = "INV-2026-891",
-        suggestedCategory = "Inventory",
-        rawText = "Sample scanned receipt preview",
-        confidenceScore = 0.85f
-      )
-    }
+  private fun extractOrNull(rawText: String): ParsedReceipt? =
+    rawText.takeIf { it.isNotBlank() }?.let(::extractReceiptDetails)
 
+  private val upiMarkers = listOf(
+    "upi", "utr", "transaction id", "txn id", "paid to", "received from", "paid you", "payment successful",
+    "transaction successful", "completed", "google pay", "phonepe", "paytm", "bhim", "credited", "debited"
+  )
+
+  fun extractReceiptDetails(rawText: String): ParsedReceipt {
+    val lower = rawText.lowercase()
+    if (upiMarkers.any { lower.contains(it) } || Regex("""[a-z0-9.\-_]{2,}@[a-z]{2,}""").containsMatchIn(lower)) {
+      PaymentMessageParser.parseScreenshot(rawText)?.let { p ->
+        return ParsedReceipt(
+          amount = p.amount,
+          vendor = p.counterparty,
+          dateString = null,
+          invoiceNo = p.reference,
+          suggestedCategory = if (p.type == "INCOME") "Sales" else "Other",
+          rawText = rawText,
+          confidenceScore = if (p.reference != null) 0.95f else 0.8f,
+          type = p.type,
+          referenceNumber = p.reference,
+          fromParty = p.fromParty,
+          toParty = p.toParty,
+          vpas = p.vpas
+        )
+      }
+    }
+    return extractShopReceipt(rawText)
+  }
+
+  private fun extractShopReceipt(rawText: String): ParsedReceipt {
     val lines = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
 
     // 1. Extract Vendor Name (usually in the first 3 lines)
@@ -147,10 +172,10 @@ object ReceiptOcrHelper {
     }
 
     return ParsedReceipt(
-      amount = amount ?: 850.0,
-      vendor = vendor ?: "Store Invoice",
-      dateString = dateStr ?: "Today",
-      invoiceNo = invoiceNo ?: "INV-${System.currentTimeMillis() % 10000}",
+      amount = amount,
+      vendor = vendor,
+      dateString = dateStr,
+      invoiceNo = invoiceNo,
       suggestedCategory = category,
       rawText = rawText,
       confidenceScore = if (amount != null && vendor != null) 0.95f else 0.70f

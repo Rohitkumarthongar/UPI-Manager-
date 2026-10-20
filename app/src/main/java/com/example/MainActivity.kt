@@ -1,10 +1,16 @@
 package com.example
 
-import android.graphics.Bitmap
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
@@ -28,6 +34,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.Badge
@@ -43,6 +50,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,11 +63,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.data.model.Client
-import com.example.data.model.NotificationDraft
 import com.example.ocr.ParsedReceipt
+import com.example.payments.PaymentNotificationListener
+import com.example.ui.dialogs.ScanPayFlow
+import com.example.update.AppUpdater
+import com.example.update.UpdateController
+import com.example.update.UpdateDialog
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.example.ui.dialogs.AddTransactionDialog
 import com.example.ui.dialogs.NotificationInboxDialog
 import com.example.ui.screens.ClientsScreen
@@ -76,24 +91,43 @@ import com.example.ui.viewmodel.AppViewModel
 import com.example.ui.viewmodel.NavigationTab
 
 class MainActivity : ComponentActivity() {
+  /** Set when a "payment received" notification is tapped. */
+  private val openPayInbox = MutableStateFlow(false)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    handleIntent(intent)
     setContent {
       val viewModel: AppViewModel = viewModel()
       val isDark by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
       MyApplicationTheme(darkTheme = isDark) {
-        MainAppContent(viewModel)
+        MainAppContent(viewModel, openPayInbox)
       }
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    handleIntent(intent)
+  }
+
+  private fun handleIntent(intent: Intent?) {
+    if (intent?.action == ACTION_OPEN_PAY_INBOX) openPayInbox.value = true
+  }
+
+  companion object {
+    const val ACTION_OPEN_PAY_INBOX = "com.example.action.OPEN_PAY_INBOX"
   }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainAppContent(viewModel: AppViewModel) {
+fun MainAppContent(viewModel: AppViewModel, openPayInbox: MutableStateFlow<Boolean> = MutableStateFlow(false)) {
   val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val updates = remember { UpdateController(AppUpdater(context.applicationContext), scope) { Toast.makeText(context, it, Toast.LENGTH_LONG).show() } }
   val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
   val isDark by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
@@ -137,6 +171,39 @@ fun MainAppContent(viewModel: AppViewModel) {
   var showNotificationInbox by remember { mutableStateOf(false) }
   var showMultiDeviceSyncScreen by remember { mutableStateOf(false) }
   var pendingReceiptToEdit by remember { mutableStateOf<ParsedReceipt?>(null) }
+  var scanOnOpen by remember { mutableStateOf(false) }
+  var showScanPay by remember { mutableStateOf(false) }
+  var listenerEnabled by remember { mutableStateOf(PaymentNotificationListener.isEnabled(context)) }
+  var smsGranted by remember { mutableStateOf(hasSmsPermission(context)) }
+
+  val wantsInbox by openPayInbox.collectAsStateWithLifecycle()
+  LaunchedEffect(wantsInbox) {
+    if (wantsInbox) {
+      showNotificationInbox = true
+      openPayInbox.value = false
+    }
+  }
+
+  // Ask once for SMS (bank credit alerts) and notification permissions, then pick up recent payment SMS.
+  val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+    smsGranted = hasSmsPermission(context)
+    if (smsGranted) viewModel.scanSmsInbox()
+  }
+  LaunchedEffect(Unit) {
+    val wanted = buildList {
+      add(Manifest.permission.RECEIVE_SMS)
+      add(Manifest.permission.READ_SMS)
+      if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+    }.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
+    if (wanted.isNotEmpty()) permissionLauncher.launch(wanted.toTypedArray())
+  }
+  LifecycleResumeEffect(Unit) {
+    listenerEnabled = PaymentNotificationListener.isEnabled(context)
+    smsGranted = hasSmsPermission(context)
+    if (smsGranted) viewModel.scanSmsInbox()
+    updates.onResume()
+    onPauseOrDispose { }
+  }
 
   Scaffold(
     modifier = Modifier.fillMaxSize().testTag("main_scaffold"),
@@ -173,6 +240,13 @@ fun MainAppContent(viewModel: AppViewModel) {
           }
         },
         actions = {
+          IconButton(
+            onClick = { showScanPay = true },
+            modifier = Modifier.testTag("top_bar_scan_pay")
+          ) {
+            Icon(Icons.Default.CenterFocusStrong, contentDescription = "Scan & Pay")
+          }
+
           // Multi-Device Range Sync Hub Icon
           IconButton(
             onClick = { showMultiDeviceSyncScreen = true },
@@ -302,8 +376,10 @@ fun MainAppContent(viewModel: AppViewModel) {
           },
           onOpenSyncScreen = { showMultiDeviceSyncScreen = true },
           onOpenReceiveUpi = { viewModel.setTab(NavigationTab.UPI_QR) },
+          onOpenScanPay = { showScanPay = true },
           onOpenOcrScanner = {
             pendingReceiptToEdit = null
+            scanOnOpen = true
             showAddTxnDialog = true
           },
           onOpenAddTransaction = {
@@ -337,6 +413,7 @@ fun MainAppContent(viewModel: AppViewModel) {
           },
           onOpenOcrScanner = {
             pendingReceiptToEdit = null
+            scanOnOpen = true
             showAddTxnDialog = true
           },
           onOpenNotificationInbox = { showNotificationInbox = true },
@@ -390,6 +467,9 @@ fun MainAppContent(viewModel: AppViewModel) {
           upiAccounts = upiAccounts,
           isDarkMode = isDark,
           onToggleDarkMode = { viewModel.toggleDarkMode() },
+          appVersion = updates.versionName,
+          checkingForUpdates = updates.checking,
+          onCheckForUpdates = { updates.manualCheck() },
           onPayBill = { bill, accId ->
             viewModel.payRecurringBill(bill, accId)
             Toast.makeText(context, "Paid: ${bill.title}", Toast.LENGTH_SHORT).show()
@@ -413,16 +493,21 @@ fun MainAppContent(viewModel: AppViewModel) {
       transactions = transactions,
       prefilledReceipt = pendingReceiptToEdit,
       isOcrLoading = isOcrProcessing,
-      onScanReceiptRequest = { bitmap ->
-        viewModel.processReceiptImage(bitmap) { parsed ->
-          pendingReceiptToEdit = parsed
+      autoLaunchCamera = scanOnOpen,
+      onScanImage = { uri ->
+        viewModel.processReceiptImage(uri) { parsed ->
+          if (parsed == null || parsed.amount == null) {
+            Toast.makeText(context, "Couldn't read an amount. Retake the photo closer and in focus, or type it in.", Toast.LENGTH_LONG).show()
+          }
+          if (parsed != null) pendingReceiptToEdit = parsed
         }
       },
       onDismiss = {
         showAddTxnDialog = false
+        scanOnOpen = false
         pendingReceiptToEdit = null
       },
-      onSave = { amount, type, category, accId, clientId, note, vendor, source ->
+      onSave = { amount, type, category, accId, clientId, note, vendor, source, reference ->
         viewModel.addTransaction(
           amount = amount,
           type = type,
@@ -431,10 +516,12 @@ fun MainAppContent(viewModel: AppViewModel) {
           clientId = clientId,
           note = note,
           vendorName = vendor,
-          source = source
+          source = source,
+          referenceNumber = reference
         )
         Toast.makeText(context, "Logged transaction to ledger", Toast.LENGTH_SHORT).show()
         showAddTxnDialog = false
+        scanOnOpen = false
         pendingReceiptToEdit = null
       }
     )
@@ -465,31 +552,53 @@ fun MainAppContent(viewModel: AppViewModel) {
           clientId = null,
           note = "${draft.senderApp}: ${draft.rawText}",
           vendorName = draft.senderOrReceiver,
-          source = "NOTIFICATION"
+          source = "NOTIFICATION",
+          referenceNumber = draft.upiReference
         )
-        viewModel.dismissNotificationDraft(draft.id)
+        viewModel.markDraftPosted(draft.id)
         Toast.makeText(context, "Posted into ledger!", Toast.LENGTH_SHORT).show()
       },
       onDismissDraft = { draftId ->
         viewModel.dismissNotificationDraft(draftId)
       },
-      onAddTestNotification = {
-        val testDraft = NotificationDraft(
-          id = "sim_${System.currentTimeMillis()}",
-          senderApp = "Paytm",
-          amount = (100..5000).random().toDouble(),
-          type = if (listOf(true, false).random()) "INCOME" else "EXPENSE",
-          rawText = "Received ₹${(100..5000).random()} from Apex Tech via UPI",
-          senderOrReceiver = "Apex Tech",
-          timestamp = System.currentTimeMillis(),
-          upiReference = "UPI/908234123"
-        )
-        viewModel.addTestNotificationDraft(testDraft)
-        Toast.makeText(context, "Simulated payment notification received!", Toast.LENGTH_SHORT).show()
+      listenerEnabled = listenerEnabled,
+      smsGranted = smsGranted,
+      onEnableListener = {
+        runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+      },
+      onRequestSms = {
+        permissionLauncher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS))
+      },
+      onScanSms = {
+        viewModel.scanSmsInbox { added ->
+          Toast.makeText(context, if (added > 0) "Found $added new payment message(s)" else "No new payment SMS", Toast.LENGTH_SHORT).show()
+        }
       },
       onClose = { showNotificationInbox = false }
     )
   }
+
+  if (showScanPay) {
+    ScanPayFlow(
+      upiAccounts = upiAccounts,
+      onPaid = { amount, payeeName, payeeVpa, reference, accountId, note ->
+        viewModel.addTransaction(
+          amount = amount,
+          type = "EXPENSE",
+          category = "Other",
+          accountId = accountId,
+          clientId = null,
+          note = "$note ($payeeVpa)",
+          vendorName = payeeName,
+          source = "UPI_PAY",
+          referenceNumber = reference
+        )
+      },
+      onClose = { showScanPay = false }
+    )
+  }
+
+  UpdateDialog(updates)
 
   // Multi-Device Range Sync Overlay
   if (showMultiDeviceSyncScreen) {
@@ -533,3 +642,6 @@ fun MainAppContent(viewModel: AppViewModel) {
     )
   }
 }
+
+private fun hasSmsPermission(context: android.content.Context) =
+  ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED

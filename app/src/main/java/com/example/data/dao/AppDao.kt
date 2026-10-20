@@ -9,6 +9,7 @@ import androidx.room.Transaction
 import androidx.room.Update
 import com.example.data.model.BudgetGoal
 import com.example.data.model.Client
+import com.example.data.model.NotificationDraft
 import com.example.data.model.RecurringBill
 import com.example.data.model.TaskItem
 import com.example.data.model.TransactionItem
@@ -49,6 +50,9 @@ interface TransactionDao {
 
   @Delete
   suspend fun deleteTransaction(item: TransactionItem)
+
+  @Query("SELECT * FROM transactions WHERE timestamp >= :since")
+  suspend fun getTransactionsSince(since: Long): List<TransactionItem>
 
   @Query("DELETE FROM transactions WHERE id = :id")
   suspend fun deleteById(id: Long)
@@ -130,4 +134,19 @@ interface BudgetDao {
 
   @Delete
   suspend fun deleteBudget(budget: BudgetGoal)
+}
+
+@Dao
+interface PaymentDraftDao {
+  @Query("SELECT * FROM payment_drafts WHERE status = 'PENDING' ORDER BY timestamp DESC")
+  fun getPendingDrafts(): Flow<List<NotificationDraft>>
+
+  @Query("SELECT * FROM payment_drafts WHERE timestamp >= :since")
+  suspend fun getDraftsSince(since: Long): List<NotificationDraft>
+
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  suspend fun insertDraft(draft: NotificationDraft): Long
+
+  @Query("UPDATE payment_drafts SET status = :status WHERE id = :id")
+  suspend fun setStatus(id: String, status: String)
 }

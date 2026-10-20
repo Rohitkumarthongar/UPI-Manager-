@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -82,6 +83,9 @@ fun ReportsScreen(
   upiAccounts: List<UpiAccount>,
   isDarkMode: Boolean,
   onToggleDarkMode: () -> Unit,
+  appVersion: String = "",
+  checkingForUpdates: Boolean = false,
+  onCheckForUpdates: () -> Unit = {},
   onPayBill: (RecurringBill, Long?) -> Unit,
   onAddBill: (title: String, amount: Double, dueDay: Int, category: String, upiId: Long?) -> Unit,
   onDeleteBill: (RecurringBill) -> Unit,
@@ -435,6 +439,28 @@ fun ReportsScreen(
               }
             }
             StatusTag(text = "Active", color = EmeraldDark)
+          }
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+              Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+              Spacer(modifier = Modifier.width(12.dp))
+              Column {
+                Text("App Updates", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                Text("Version $appVersion", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+              }
+            }
+            OutlinedButton(
+              onClick = onCheckForUpdates,
+              enabled = !checkingForUpdates,
+              modifier = Modifier.testTag("check_updates_button")
+            ) {
+              Text(if (checkingForUpdates) "Checking…" else "Check for updates")
+            }
           }
         }
       }
