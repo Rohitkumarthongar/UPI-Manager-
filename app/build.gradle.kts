@@ -30,9 +30,8 @@ android {
     applicationId = "com.aistudio.offlineledger.vknpxq"
     minSdk = 24
     targetSdk = 36
-    // CI passes -PappVersionCode/-PappVersionName; local builds stay at 1 so any published release is newer.
-    versionCode = (project.findProperty("appVersionCode") as String?)?.toInt() ?: 1
-    versionName = (project.findProperty("appVersionName") as String?) ?: "1.0"
+    versionCode = releaseVersionCode
+    versionName = releaseVersionName
     // GitHub repository whose releases the in-app updater checks.
     buildConfigField("String", "UPDATE_REPO", "\"${project.findProperty("updateRepo") ?: "Rohitkumarthongar/UPI-Manager-"}\"")
 
