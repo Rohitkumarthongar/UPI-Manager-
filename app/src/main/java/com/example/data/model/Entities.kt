@@ -100,15 +100,18 @@ data class BudgetGoal(
 )
 
 /**
- * Draft transaction parsed from payment confirmations or notification listener.
+ * Draft transaction parsed from a bank SMS or a UPI app notification, waiting for the user to post it.
+ * Posted and dismissed drafts are kept so the same message is never offered twice.
  */
+@Entity(tableName = "payment_drafts")
 data class NotificationDraft(
-  val id: String,
+  @PrimaryKey val id: String,
   val senderApp: String, // GPay, PhonePe, Paytm, HDFC Bank, etc.
   val amount: Double,
   val type: String, // "INCOME" or "EXPENSE"
   val rawText: String,
   val senderOrReceiver: String,
   val timestamp: Long = System.currentTimeMillis(),
-  val upiReference: String? = null
+  val upiReference: String? = null,
+  val status: String = "PENDING" // PENDING, POSTED, DISMISSED
 )

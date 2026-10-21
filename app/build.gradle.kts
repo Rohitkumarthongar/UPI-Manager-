@@ -30,8 +30,11 @@ android {
     applicationId = "com.aistudio.offlineledger.vknpxq"
     minSdk = 24
     targetSdk = 36
-    versionCode = releaseVersionCode
-    versionName = releaseVersionName
+    // CI passes -PappVersionCode/-PappVersionName; local builds stay at 1 so any published release is newer.
+    versionCode = (project.findProperty("appVersionCode") as String?)?.toInt() ?: 1
+    versionName = (project.findProperty("appVersionName") as String?) ?: "1.0"
+    // GitHub repository whose releases the in-app updater checks.
+    buildConfigField("String", "UPDATE_REPO", "\"${project.findProperty("updateRepo") ?: "Rohitkumarthongar/UPI-Manager-"}\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -127,6 +130,7 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.zxing.core)
   implementation(libs.mlkit.text.recognition)
+  implementation(libs.mlkit.code.scanner)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
   // Uncomment to use Firestore:

@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.NotificationDraft
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.formatCurrency
+import com.example.ui.theme.AccentAmber
 import com.example.ui.theme.AccentRose
 import com.example.ui.theme.EmeraldDark
 import com.example.ui.theme.EmeraldPrimary
@@ -52,7 +54,11 @@ fun NotificationInboxDialog(
   drafts: List<NotificationDraft>,
   onConfirmDraft: (NotificationDraft) -> Unit,
   onDismissDraft: (String) -> Unit,
-  onSyncSmsInbox: () -> Unit,
+  listenerEnabled: Boolean,
+  smsGranted: Boolean,
+  onEnableListener: () -> Unit,
+  onRequestSms: () -> Unit,
+  onScanSms: () -> Unit,
   onClose: () -> Unit
 ) {
   val timeFormat = SimpleDateFormat("hh:mm a", Locale.getDefault())
@@ -110,13 +116,29 @@ fun NotificationInboxDialog(
           }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (!smsGranted) {
+          SetupHint(
+            text = "Allow SMS access so bank credit alerts are read the moment money arrives.",
+            action = "Allow SMS",
+            onClick = onRequestSms
+          )
+        }
+        if (!listenerEnabled) {
+          SetupHint(
+            text = "Turn on notification access to read GPay, PhonePe, Paytm and bank app alerts. " +
+              "If it is greyed out: App info → ⋮ → Allow restricted settings.",
+            action = "Turn on",
+            onClick = onEnableListener
+          )
+        }
 
         if (drafts.isEmpty()) {
           EmptyStateView(
             icon = Icons.Default.Payments,
             title = "Inbox is Empty",
-            subtitle = "No unconfirmed payment alerts.\nBank SMS is scanned with permission; you can also import manually."
+            subtitle = "No unposted payments.\nNew UPI credits from SMS and payment apps appear here automatically."
           )
         } else {
           LazyColumn(
@@ -136,19 +158,33 @@ fun NotificationInboxDialog(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // SMS Inbox Sync Button
         OutlinedButton(
-          onClick = onSyncSmsInbox,
+          onClick = onScanSms,
+          enabled = smsGranted,
           shape = RoundedCornerShape(12.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .testTag("sync_sms_inbox_button")
+            .testTag("scan_sms_button")
         ) {
           Icon(Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(16.dp))
           Spacer(modifier = Modifier.width(8.dp))
-          Text("Scan Bank SMS Inbox for Payments", style = MaterialTheme.typography.labelLarge)
+          Text("Scan recent SMS for payments", style = MaterialTheme.typography.labelLarge)
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun SetupHint(text: String, action: String, onClick: () -> Unit) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = AccentAmber.copy(alpha = 0.15f),
+    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+  ) {
+    Row(modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+      Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+      TextButton(onClick = onClick) { Text(action, fontWeight = FontWeight.Bold) }
     }
   }
 }

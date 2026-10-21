@@ -2,12 +2,11 @@ package com.example.ui.dialogs
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.ImageDecoder
 import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
 import android.widget.Toast
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -84,7 +83,9 @@ fun AddTransactionDialog(
   transactions: List<TransactionItem> = emptyList(),
   prefilledReceipt: ParsedReceipt? = null,
   isOcrLoading: Boolean = false,
-  onScanReceiptRequest: ((Bitmap) -> Unit)? = null,
+  /** Opens the camera as soon as the dialog appears ("Scan" quick actions). */
+  autoLaunchCamera: Boolean = false,
+  onScanImage: ((Uri) -> Unit)? = null,
   onDismiss: () -> Unit,
   onSave: (
     amount: Double,
@@ -94,8 +95,8 @@ fun AddTransactionDialog(
     clientId: Long?,
     note: String,
     vendor: String?,
-    referenceNumber: String?,
-    source: String
+    source: String,
+    reference: String?
   ) -> Unit
 ) {
   val context = LocalContext.current
@@ -145,38 +146,65 @@ fun AddTransactionDialog(
     }
   }
 
-  // Gallery image picker launcher for OCR
-  val galleryLauncher = rememberLauncherForActivityResult(
-    contract = ActivityResultContracts.GetContent()
-  ) { uri: Uri? ->
-    uri?.let {
-      try {
-        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-          ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, it)) { decoder, _, _ ->
-            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-            decoder.isMutableRequired = true
-          }
-        } else {
-          @Suppress("DEPRECATION")
-          MediaStore.Images.Media.getBitmap(context.contentResolver, it)
-        }
-        scanError = null
-        onScanReceiptRequest?.invoke(bitmap)
-      } catch (_: Exception) {
-        scanError = "Could not open this image. Choose another image or enter the details manually."
-      }
+  var reference by remember { mutableStateOf("") }
+
+  // Fill the form whenever a scan finishes. Plain remember{} only reads the first value, which is why scanned
+  // amounts never showed up before.
+  LaunchedEffect(prefilledReceipt) {
+    val r = prefilledReceipt ?: return@LaunchedEffect
+    r.amount?.let { amountText = String.format(java.util.Locale.US, "%.2f", it) }
+    source = "OCR"
+    reference = r.referenceNumber.orEmpty()
+    // A screenshot from the customer's phone says "Paid to <you>": if it names one of our UPI ids or payee
+    // names, it is money received into that account.
+    val text = r.rawText.lowercase()
+    val ours = upiAccounts.firstOrNull { acc ->
+      r.vpas.any { it.equals(acc.upiId, ignoreCase = true) } || text.contains(acc.upiId.lowercase()) ||
+        (acc.payeeName.length >= 4 && text.contains(acc.payeeName.lowercase()))
+    }
+    type = when {
+      ours != null -> "INCOME"
+      r.type != null -> r.type
+      else -> "EXPENSE"
+    }
+    ours?.let { selectedAccountId = it.id }
+    vendor = (if (ours != null) r.fromParty ?: r.vendor else r.vendor)?.takeIf { party ->
+      ours == null || !party.contains(ours.payeeName, ignoreCase = true)
+    }.orEmpty()
+    selectedCategory = if (type == "INCOME") "Sales" else r.suggestedCategory
+    note = when {
+      r.isUpiScreenshot -> "UPI payment screenshot" + (r.referenceNumber?.let { " • Ref $it" } ?: "")
+      else -> "Scanned Receipt" + (r.invoiceNo?.let { " ($it)" } ?: "")
     }
   }
 
-  // Camera capture launcher for OCR
-  val cameraLauncher = rememberLauncherForActivityResult(
-    contract = ActivityResultContracts.TakePicturePreview()
-  ) { bitmap: Bitmap? ->
-    bitmap?.let {
-      scanError = null
-      onScanReceiptRequest?.invoke(it)
-    }
+  val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+    uri?.let { onScanImage?.invoke(it) }
   }
+
+  // Full-resolution photo (the old preview thumbnail was too small for OCR to read).
+  var photoUri by remember { mutableStateOf<Uri?>(null) }
+  val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+    val uri = photoUri
+    if (saved && uri != null) onScanImage?.invoke(uri)
+  }
+  fun launchCamera() {
+    val dir = File(context.cacheDir, "ocr").apply { mkdirs() }
+    val file = File(dir, "scan_${System.currentTimeMillis()}.jpg")
+    val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
+    photoUri = uri
+    runCatching { cameraLauncher.launch(uri) }
+      .onFailure { Toast.makeText(context, "No camera app available", Toast.LENGTH_SHORT).show() }
+  }
+  // The app declares CAMERA, so Android refuses the camera intent until the permission is granted.
+  val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    if (granted) launchCamera() else Toast.makeText(context, "Camera permission is needed to scan", Toast.LENGTH_LONG).show()
+  }
+  fun openCamera() {
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
+    else cameraPermission.launch(Manifest.permission.CAMERA)
+  }
+  LaunchedEffect(Unit) { if (autoLaunchCamera && prefilledReceipt == null) openCamera() }
 
   // Camera permission launcher
   val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -263,12 +291,12 @@ fun AddTransactionDialog(
               Spacer(modifier = Modifier.width(10.dp))
               Column {
                 Text(
-                  text = "Smart Receipt OCR",
+                  text = "Scan Receipt / UPI Screenshot",
                   style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                   color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                  text = if (isOcrLoading) "Analyzing receipt..." else "Extract amount, vendor & date",
+                  text = if (isOcrLoading) "Reading image..." else "Photo of a bill or the payer's payment screen",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -279,17 +307,7 @@ fun AddTransactionDialog(
             } else {
               Row {
                 IconButton(
-                  onClick = {
-                    val hasCamPermission = ContextCompat.checkSelfPermission(
-                      context,
-                      Manifest.permission.CAMERA
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (hasCamPermission) {
-                      cameraLauncher.launch(null)
-                    } else {
-                      cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                    }
-                  },
+                  onClick = { openCamera() },
                   modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
@@ -396,6 +414,29 @@ fun AddTransactionDialog(
           shape = RoundedCornerShape(12.dp),
           modifier = Modifier.fillMaxWidth().testTag("vendor_input_field")
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+          value = reference,
+          onValueChange = { reference = it.trim() },
+          label = { Text("UPI Ref / UTR (optional)") },
+          placeholder = { Text("12-digit UPI reference") },
+          singleLine = true,
+          shape = RoundedCornerShape(12.dp),
+          modifier = Modifier.fillMaxWidth().testTag("reference_input_field")
+        )
+        val alreadyLogged = reference.length >= 6 && transactions.any {
+          it.referenceNumber == reference || it.note.contains(reference)
+        }
+        if (alreadyLogged) {
+          Text(
+            text = "⚠️ A transaction with this reference is already in the ledger.",
+            style = MaterialTheme.typography.labelSmall,
+            color = AccentRose,
+            modifier = Modifier.padding(top = 4.dp)
+          )
+        }
 
         Spacer(modifier = Modifier.height(14.dp))
 
@@ -581,8 +622,8 @@ fun AddTransactionDialog(
                 selectedClientId,
                 note,
                 vendor.ifBlank { null },
-                referenceNumber.ifBlank { null },
-                source
+                source,
+                reference.ifBlank { null }
               )
               onDismiss()
             }
