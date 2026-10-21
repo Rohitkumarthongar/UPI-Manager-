@@ -41,52 +41,47 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -z "$KS" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
-            echo "::error::Add the UPI_KEYSTORE_BASE64, STORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD secrets (see the top of this file)."
+          missing=()
+          for name in RELEASE_KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing required GitHub Actions repository secrets: ${missing[*]}. Add them under repository Settings > Secrets and variables > Actions."
             exit 1
           fi
+          python3 - <<'PY'
+          import base64, os, pathlib
+          try:
+              data = base64.b64decode(os.environ['RELEASE_KEYSTORE_BASE64'], validate=True)
+              if not data:
+                  raise ValueError('empty keystore')
+              pathlib.Path('release-upload.jks').write_bytes(data)
+          except ValueError as exc:
+              raise SystemExit(f'Invalid release keystore: {exc}')
+          PY
+          chmod 600 release-upload.jks
+          echo "KEYSTORE_PATH=$PWD/release-upload.jks" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      - name: Version
-        id: v
-        # Local builds are versionCode 1, so every published release is newer than any build already installed.
-        run: |
-          echo "code=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
-          echo "name=1.1.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-
-      - name: Build signed APK
+      - name: Build signed release APK
         env:
-          KS: ${{ secrets.UPI_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
-          export KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
-          chmod +x gradlew
-          ./gradlew --no-daemon :app:assembleRelease \
-            -PappVersionCode="${{ steps.v.outputs.code }}" \
-            -PappVersionName="${{ steps.v.outputs.name }}" \
-            -PupdateRepo="${{ github.repository }}"
-          rm -f "$RUNNER_TEMP/release.jks"
+          code=$(( $(date -u +%s) - 1577836800 ))
+          if (( code < 3 || code > 2100000000 )); then
+            echo '::error::Generated versionCode is outside Android range'
+            exit 1
+          fi
+          ./gradlew assembleRelease -PreleaseVersionCode="$code" -PreleaseVersionName="1.0.$code" --stacktrace
 
-      - name: Publish release
+      - name: Create GitHub Release and Upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/app-release.apk
+          fail_on_unmatched_files: true
+          generate_release_notes: true
         env:
-          GH_TOKEN: ${{ github.token }}
-          CODE: ${{ steps.v.outputs.code }}
-          NAME: ${{ steps.v.outputs.name }}
-          NOTES: ${{ github.event.inputs.notes || github.event.head_commit.message }}
-        run: |
-          apk="upi-manager-$NAME.apk"
-          cp app/build/outputs/apk/release/app-release.apk "$apk"
-          sha=$(sha256sum "$apk" | cut -d' ' -f1)
-          summary=$(printf '%s' "$NOTES" | head -n 1)
-          # The app reads the hidden line to compare versions and verify the download.
-          printf '%s\n\n<!-- upi-manager:versionCode=%s sha256=%s -->\n' "${summary:-Improvements and fixes.}" "$CODE" "$sha" > notes.md
-          gh release create "v$NAME" "$apk" --title "UPI Manager $NAME" --notes-file notes.md --latest
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

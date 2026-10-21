@@ -131,7 +131,6 @@ fun MultiDeviceSyncScreen(
   onSyncNow: (String, String, (Boolean, String) -> Unit) -> Unit,
   onTestPing: (String, (Boolean, String) -> Unit) -> Unit,
   onToggleAutoSync: (Boolean) -> Unit,
-  onSimulateReceivedPayment: ((Double, String) -> Unit)? = null,
   onBack: () -> Unit
 ) {
   val context = LocalContext.current
@@ -308,7 +307,6 @@ fun MultiDeviceSyncScreen(
                   onSyncNow = onSyncNow,
                   onTestPing = onTestPing,
                   onToggleAutoSync = onToggleAutoSync,
-                  onSimulateReceivedPayment = onSimulateReceivedPayment,
                   onScanCamera = { takePhotoLauncher.launch(null) },
                   onPickImage = { qrPickerLauncher.launch("image/*") }
                 )
@@ -396,7 +394,6 @@ fun MultiDeviceSyncScreen(
                 onSyncNow = onSyncNow,
                 onTestPing = onTestPing,
                 onToggleAutoSync = onToggleAutoSync,
-                onSimulateReceivedPayment = onSimulateReceivedPayment,
                 onScanCamera = { takePhotoLauncher.launch(null) },
                 onPickImage = { qrPickerLauncher.launch("image/*") }
               )
@@ -734,7 +731,6 @@ fun ClientConnectPanel(
   onSyncNow: (String, String, (Boolean, String) -> Unit) -> Unit,
   onTestPing: (String, (Boolean, String) -> Unit) -> Unit,
   onToggleAutoSync: (Boolean) -> Unit,
-  onSimulateReceivedPayment: ((Double, String) -> Unit)? = null,
   onScanCamera: () -> Unit,
   onPickImage: () -> Unit
 ) {
@@ -976,26 +972,6 @@ fun ClientConnectPanel(
             checked = isAutoSyncEnabled,
             onCheckedChange = onToggleAutoSync
           )
-        }
-      }
-
-      if (onSimulateReceivedPayment != null) {
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedButton(
-          onClick = {
-            val randomAmt = listOf(250.0, 500.0, 750.0, 1200.0, 1850.0).random()
-            onSimulateReceivedPayment(randomAmt, "Customer via UPI")
-            Toast.makeText(context, "Simulated ₹${randomAmt.toInt()} payment on this mobile!", Toast.LENGTH_SHORT).show()
-          },
-          shape = RoundedCornerShape(10.dp),
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(42.dp)
-            .testTag("simulate_payment_button")
-        ) {
-          Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
-          Spacer(modifier = Modifier.width(6.dp))
-          Text("Simulate Payment Received on this Mobile", style = MaterialTheme.typography.labelSmall)
         }
       }
 

@@ -61,6 +61,34 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `test phonepe payment screenshot parsing`() {
+    val samplePhonePeText = """
+      Transaction Successful
+      05:54 pm on 14 Aug 2026
+      Paid to
+      Puniya tyres
+      paytmqr1rcvn1deli@paytm
+      ₹22,000
+      Transfer Details
+      PhonePe Transaction ID
+      T2608141754066026713528
+      Debited from
+      XXXXXX8787 ₹22,000
+      UTR: 951886448560
+      Powered by UPI AXIS BANK
+    """.trimIndent()
+
+    val parsed = ReceiptOcrHelper.extractReceiptDetails(samplePhonePeText)
+    assertEquals("Puniya tyres", parsed.vendor)
+    assertNotNull(parsed.amount)
+    assertEquals(22000.0, parsed.amount!!, 0.01)
+    assertEquals("EXPENSE", parsed.type)
+    assertEquals("paytmqr1rcvn1deli@paytm", parsed.upiId)
+    assertEquals("951886448560", parsed.invoiceNo)
+    assertEquals("14 Aug 2026", parsed.dateString)
+  }
+
+  @Test
   fun `test crypto encryption roundtrip`() {
     val sensitiveFinancialNote = "Confidential Vendor Contract Advance ₹50,000"
     val encrypted = CryptoManager.encrypt(sensitiveFinancialNote)

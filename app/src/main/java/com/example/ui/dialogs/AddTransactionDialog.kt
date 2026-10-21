@@ -63,6 +63,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import com.example.data.model.Client
 import com.example.data.model.TransactionItem
 import com.example.data.model.UpiAccount
@@ -103,9 +104,9 @@ fun AddTransactionDialog(
   var amountText by remember {
     mutableStateOf(prefilledReceipt?.amount?.let { String.format(java.util.Locale.US, "%.2f", it) } ?: "")
   }
-  var type by remember { mutableStateOf("EXPENSE") }
+  var type by remember { mutableStateOf(prefilledReceipt?.type ?: "EXPENSE") }
   var selectedCategory by remember {
-    mutableStateOf(prefilledReceipt?.suggestedCategory ?: "Inventory")
+    mutableStateOf(prefilledReceipt?.suggestedCategory ?: "Sales")
   }
   var selectedAccountId by remember {
     mutableStateOf<Long?>(upiAccounts.firstOrNull { it.isActive }?.id ?: upiAccounts.firstOrNull()?.id)
@@ -114,12 +115,36 @@ fun AddTransactionDialog(
   var note by remember {
     mutableStateOf(
       if (prefilledReceipt != null) {
-        "Scanned Receipt (${prefilledReceipt.invoiceNo ?: "OCR"})"
+        val ref = prefilledReceipt.invoiceNo?.let { "Ref/UTR: $it" }
+        val upi = prefilledReceipt.upiId?.let { "VPA: $it" }
+        listOfNotNull(ref, upi).joinToString(" • ").ifBlank { "Scanned Payment Receipt" }
       } else ""
     )
   }
   var vendor by remember { mutableStateOf(prefilledReceipt?.vendor ?: "") }
   var source by remember { mutableStateOf(if (prefilledReceipt != null) "OCR" else "MANUAL") }
+  var referenceNumber by remember { mutableStateOf(prefilledReceipt?.invoiceNo.orEmpty()) }
+  var scanError by remember { mutableStateOf<String?>(prefilledReceipt?.extractionError) }
+
+  // OCR runs asynchronously while this dialog remains composed. Keep the editable
+  // fields synchronized when a newly parsed receipt is delivered.
+  LaunchedEffect(prefilledReceipt) {
+    prefilledReceipt?.let { receipt ->
+      scanError = receipt.extractionError
+      if (receipt.amount != null) {
+        amountText = String.format(java.util.Locale.US, "%.2f", receipt.amount)
+        type = receipt.type
+        selectedCategory = receipt.suggestedCategory
+        vendor = receipt.vendor.orEmpty()
+        referenceNumber = receipt.invoiceNo.orEmpty()
+        note = listOfNotNull(
+          receipt.invoiceNo?.let { "Ref/UTR: $it" },
+          receipt.upiId?.let { "VPA: $it" }
+        ).joinToString(" • ").ifBlank { "Scanned Payment Receipt" }
+        source = "OCR"
+      }
+    }
+  }
 
   var reference by remember { mutableStateOf("") }
 
@@ -180,6 +205,17 @@ fun AddTransactionDialog(
     else cameraPermission.launch(Manifest.permission.CAMERA)
   }
   LaunchedEffect(Unit) { if (autoLaunchCamera && prefilledReceipt == null) openCamera() }
+
+  // Camera permission launcher
+  val cameraPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission()
+  ) { isGranted ->
+    if (isGranted) {
+      cameraLauncher.launch(null)
+    } else {
+      Toast.makeText(context, "Camera permission is required to capture payment screenshots & receipts", Toast.LENGTH_SHORT).show()
+    }
+  }
 
   val categories = listOf("Sales", "Services", "Inventory", "Rent", "Utilities", "Food", "Travel", "Salary", "Supplies", "Other")
 
@@ -308,6 +344,16 @@ fun AddTransactionDialog(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        scanError?.let { message ->
+          Text(
+            text = message,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.fillMaxWidth().testTag("ocr_extraction_error")
+          )
+          Spacer(modifier = Modifier.height(12.dp))
+        }
+
         // Type Toggle: Income vs Expense
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -342,7 +388,10 @@ fun AddTransactionDialog(
         // Amount Input Field
         OutlinedTextField(
           value = amountText,
-          onValueChange = { amountText = it },
+          onValueChange = {
+            amountText = it
+            if (prefilledReceipt?.amount == null) source = "MANUAL"
+          },
           label = { Text("Amount (₹)") },
           placeholder = { Text("0.00") },
           singleLine = true,

@@ -1,0 +1,7 @@
+{
+  "latestVersionCode": 2,
+  "latestVersionName": "1.1.0",
+  "apkDownloadUrl": "https://upi-manager-b2087.web.app/app-release.apk",
+  "isMandatory": false,
+  "releaseNotes": "1. Auto-parse bank payment SMS and receipts.\n2. Automatic in-app APK update downloads.\n3. Enhanced UTR and reference ID OCR scanner.\n4. Bug fixes and speed improvements."
+}

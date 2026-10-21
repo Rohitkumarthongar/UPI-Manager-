@@ -11,6 +11,17 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+// CI supplies both values for the APK and the Hosting manifest; local builds keep a usable default.
+val releaseVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.let { raw ->
+  raw.toIntOrNull()?.takeIf { it in 3..2_100_000_000 }
+    ?: error("releaseVersionCode must be an integer from 3 to 2100000000")
+} ?: 3
+val releaseVersionName = providers.gradleProperty("releaseVersionName").orNull?.also { name ->
+  require(name.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,49}"))) {
+    "releaseVersionName must be 1-50 alphanumeric, dot, underscore or hyphen characters"
+  }
+} ?: "1.2.0"
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -41,11 +52,14 @@ android {
       keyAlias = keystoreProperties.getProperty("KEY_ALIAS") ?: System.getenv("KEY_ALIAS") ?: "upload"
       keyPassword = keystoreProperties.getProperty("KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD")
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+    val debugKeystoreFile = rootProject.file("debug.keystore")
+    if (debugKeystoreFile.exists()) {
+      create("debugConfig") {
+        storeFile = debugKeystoreFile
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
@@ -56,7 +70,11 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug {
+      if (signingConfigs.findByName("debugConfig") != null) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -101,6 +119,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.work.runtime.ktx)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -138,6 +157,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.work.testing)
   testImplementation(libs.roborazzi)
   testImplementation(libs.roborazzi.compose)
   testImplementation(libs.roborazzi.junit.rule)
