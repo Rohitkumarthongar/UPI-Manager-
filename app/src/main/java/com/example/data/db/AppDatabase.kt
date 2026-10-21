@@ -65,9 +65,7 @@ abstract class AppDatabase : RoomDatabase() {
           AppDatabase::class.java,
           "offline_ledger.db"
         )
-          .addCallback(DatabaseCallback())
           .addMigrations(MIGRATION_2_3)
-          .fallbackToDestructiveMigration()
           .build()
         INSTANCE = instance
         instance

@@ -142,7 +142,9 @@ object PaymentMessageParser {
   private fun counterparty(text: String, type: String): String? {
     val stop = """(?=\s+(?:via|on|ref|refno|upi|using|in|for|at|with|towards|a/c|account|is|has|was)\b|[,;(]|\.(?=\s|$)|\s*$)"""
     val patterns = if (type == "INCOME") listOf(
-      Regex("""(?:from|by)\s+(?:vpa\s+)?(.+?)$stop""", RegexOption.IGNORE_CASE),
+      // "from" names the payer more reliably than "by" ("credited by UPI from Sunita").
+      Regex("""\bfrom\s+(?:vpa\s+)?(.+?)$stop""", RegexOption.IGNORE_CASE),
+      Regex("""\bby\s+(?!upi\b|neft\b|imps\b|rtgs\b)(?:vpa\s+)?(.+?)$stop""", RegexOption.IGNORE_CASE),
       Regex("""^(.+?)\s+(?:has\s+)?(?:paid|sent)\s+you""", RegexOption.IGNORE_CASE)
     ) else listOf(
       Regex("""(?:paid|sent|transferred|payment)\s+to\s+(?:vpa\s+)?(.+?)$stop""", RegexOption.IGNORE_CASE),

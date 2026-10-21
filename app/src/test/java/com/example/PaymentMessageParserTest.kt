@@ -91,4 +91,29 @@ class PaymentMessageParserTest {
     assertEquals("Anil Kumar", p.counterparty)
     assertEquals("429877778888", p.reference)
   }
+
+  // Cases carried over from the earlier SmsPaymentParser tests on main.
+  @Test fun creditAndDebitWithBalanceUseTransactionAmount() {
+    val income = PaymentMessageParser.parseMessage("Your a/c credited INR 1,250.50 by UPI. Avl bal INR 20,000. Ref: 123456789012")!!
+    assertEquals("INCOME", income.type)
+    assertEquals(1250.50, income.amount, 0.001)
+    assertEquals("123456789012", income.reference)
+    val named = PaymentMessageParser.parseMessage("Your a/c credited INR 2,000.00 by UPI from Sunita. Avl bal INR 20,000. Ref: 123456789999")!!
+    assertEquals("Sunita", named.counterparty)
+    assertEquals(2000.0, named.amount, 0.001)
+    val expense = PaymentMessageParser.parseMessage("Rs. 450 debited from A/c XX9012. Balance Rs 1200. UTR 987654321012")!!
+    assertEquals("EXPENSE", expense.type)
+    assertEquals(450.0, expense.amount, 0.001)
+    assertEquals("987654321012", expense.reference)
+  }
+
+  @Test fun rejectsCodesPromotionsFailuresPendingAndBalanceOnly() {
+    listOf(
+      "OTP 123456 for INR 500 paid via UPI",
+      "Offer! You received Rs 500 cashback",
+      "Transaction failed: Rs 500 debited",
+      "Your account available balance INR 500",
+      "UPI transaction pending. Rs 500 paid"
+    ).forEach { assertNull(it, PaymentMessageParser.parseMessage(it)) }
+  }
 }

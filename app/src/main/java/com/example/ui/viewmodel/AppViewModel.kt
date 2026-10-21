@@ -24,14 +24,6 @@ import com.example.sync.SyncPayload
 import com.example.sync.SyncResponse
 import com.example.sync.SyncTransactionDto
 import com.example.sync.SyncUpiAccountDto
-import com.example.util.AppVersionConfig
-import com.example.util.InAppUpdateManager
-import com.example.util.UpdateCheckStore
-import com.example.util.UpdateChecks
-import com.example.util.SmsPaymentParser
-import com.example.util.SmsDraftStore
-import androidx.core.content.ContextCompat
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,9 +34,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 enum class NavigationTab {
   DASHBOARD,
@@ -222,7 +211,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     clientId: Long?,
     note: String,
     vendorName: String?,
-    referenceNumber: String? = null,
     source: String = "MANUAL",
     receiptPath: String? = null,
     referenceNumber: String? = null

@@ -12,14 +12,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.core.content.ContextCompat
-import com.example.ui.dialogs.InAppUpdateDialog
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -97,9 +89,6 @@ import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AppViewModel
 import com.example.ui.viewmodel.NavigationTab
-import com.example.util.SmsPaymentReceiver
-import com.example.util.UpdateCheckScheduler
-import com.example.util.UpdateCheckWorker
 
 class MainActivity : ComponentActivity() {
   /** Set when a "payment received" notification is tapped. */
@@ -107,8 +96,6 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    UpdateCheckScheduler.schedule(this)
-    if (intent?.getBooleanExtra(UpdateCheckWorker.EXTRA_OPEN_UPDATE, false) == true) notificationOpenToken++
     enableEdgeToEdge()
     handleIntent(intent)
     setContent {
@@ -164,11 +151,6 @@ fun MainAppContent(viewModel: AppViewModel, openPayInbox: MutableStateFlow<Boole
   val isOcrProcessing by viewModel.isOcrProcessing.collectAsStateWithLifecycle()
   val parsedReceipt by viewModel.parsedReceipt.collectAsStateWithLifecycle()
 
-  // In-App Update States
-  val remoteUpdateConfig by viewModel.remoteUpdateConfig.collectAsStateWithLifecycle()
-  val isDownloadingUpdate by viewModel.isDownloadingUpdate.collectAsStateWithLifecycle()
-  val downloadProgress by viewModel.downloadProgress.collectAsStateWithLifecycle()
-
   // Multi-Device Range Sync States
   val isHostingSync by viewModel.isHostingServer.collectAsStateWithLifecycle()
   val serverIp by viewModel.serverIpAddress.collectAsStateWithLifecycle()
@@ -187,7 +169,6 @@ fun MainAppContent(viewModel: AppViewModel, openPayInbox: MutableStateFlow<Boole
   // Dialog Visibility States
   var showAddTxnDialog by remember { mutableStateOf(false) }
   var showNotificationInbox by remember { mutableStateOf(false) }
-  var pendingSmsPermissionScan by remember { mutableStateOf(false) }
   var showMultiDeviceSyncScreen by remember { mutableStateOf(false) }
   var pendingReceiptToEdit by remember { mutableStateOf<ParsedReceipt?>(null) }
   var scanOnOpen by remember { mutableStateOf(false) }
@@ -222,91 +203,6 @@ fun MainAppContent(viewModel: AppViewModel, openPayInbox: MutableStateFlow<Boole
     if (smsGranted) viewModel.scanSmsInbox()
     updates.onResume()
     onPauseOrDispose { }
-  }
-
-  // Startup Runtime Permissions Request (Camera, SMS & Notifications) & Update Check
-  val permissionLauncher = rememberLauncherForActivityResult(
-    contract = ActivityResultContracts.RequestMultiplePermissions()
-  ) { results ->
-    if (results[Manifest.permission.READ_SMS] == true) {
-      viewModel.scanBankSmsInbox(context) { added, message ->
-        if (added != null && added > 0) showNotificationInbox = true
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-      }
-    } else if (results.containsKey(Manifest.permission.READ_SMS)) {
-      Toast.makeText(context, "SMS inbox access denied. You can still enter payments manually.", Toast.LENGTH_LONG).show()
-    }
-    if (pendingSmsPermissionScan && results[Manifest.permission.READ_SMS] != true) {
-      Toast.makeText(context, "Allow SMS access to import payment alerts", Toast.LENGTH_SHORT).show()
-    }
-    pendingSmsPermissionScan = false
-  }
-
-  LaunchedEffect(Unit) {
-    viewModel.refreshCachedUpdate(context)
-    viewModel.checkForAppUpdate(context)
-    if (drafts.isNotEmpty()) showNotificationInbox = true
-    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
-      viewModel.scanBankSmsInbox(context) { added, _ -> if (added != null && added > 0) showNotificationInbox = true }
-    }
-
-    val permissionsToRequest = mutableListOf(
-      Manifest.permission.CAMERA,
-      Manifest.permission.READ_SMS,
-      Manifest.permission.RECEIVE_SMS
-    )
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
-    }
-    val ungranted = permissionsToRequest.filter {
-      ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-    }
-    if (ungranted.isNotEmpty()) {
-      permissionLauncher.launch(ungranted.toTypedArray())
-    }
-  }
-
-  LaunchedEffect(openUpdateFromNotification) {
-    if (openUpdateFromNotification > 0) viewModel.refreshCachedUpdate(context, fromNotification = true)
-  }
-
-  DisposableEffect(lifecycleOwner) {
-    val observer = LifecycleEventObserver { _, event ->
-      if (event == Lifecycle.Event.ON_RESUME) {
-        com.example.util.InAppUpdateManager.resumePendingInstall(context)
-        viewModel.refreshCachedUpdate(context)
-        viewModel.checkForAppUpdate(context)
-        viewModel.refreshSmsDrafts()
-        if (viewModel.notificationDrafts.value.isNotEmpty()) showNotificationInbox = true
-      }
-      if (event == Lifecycle.Event.ON_RESUME &&
-        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
-        viewModel.scanBankSmsInbox(context) { added, _ -> if (added != null && added > 0) showNotificationInbox = true }
-      }
-    }
-    lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-  }
-
-  // SMS Payment Broadcast Receiver
-  DisposableEffect(context) {
-    val smsReceiver = object : BroadcastReceiver() {
-      override fun onReceive(context: Context?, intent: Intent?) {
-        if (intent?.action == SmsPaymentReceiver.ACTION_PAYMENT_SMS_RECEIVED) {
-          if (viewModel.refreshSmsDrafts() > 0) showNotificationInbox = true
-        }
-      }
-    }
-    val filter = IntentFilter(SmsPaymentReceiver.ACTION_PAYMENT_SMS_RECEIVED)
-    ContextCompat.registerReceiver(
-      context,
-      smsReceiver,
-      filter,
-      ContextCompat.RECEIVER_NOT_EXPORTED
-    )
-    onDispose {
-      try { context.unregisterReceiver(smsReceiver) } catch (_: Exception) {}
-    }
   }
 
   Scaffold(
@@ -730,17 +626,6 @@ fun MainAppContent(viewModel: AppViewModel, openPayInbox: MutableStateFlow<Boole
       onTestPing = { url, cb -> viewModel.testHostConnection(url, cb) },
       onToggleAutoSync = { viewModel.toggleAutoSync(it) },
       onBack = { showMultiDeviceSyncScreen = false }
-    )
-  }
-
-  // In-App Update Dialog
-  remoteUpdateConfig?.let { config ->
-    InAppUpdateDialog(
-      config = config,
-      isDownloading = isDownloadingUpdate,
-      downloadProgress = downloadProgress,
-      onStartUpdate = { viewModel.startAppUpdate(context, config) },
-      onDismiss = { viewModel.dismissUpdateDialog() }
     )
   }
 }
